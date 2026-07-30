@@ -116,6 +116,7 @@ app.use(cors({
         'https://zirakbook-accounting.wenbear.online/',
         'https://accounting-news.kiaantechnology.com/',
         'http://localhost:5173',
+        'https://localhost:5173',
         'https://new-accounting.netlify.app',
         'http://new-accounting.netlify.app'
     ],
