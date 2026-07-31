@@ -246,6 +246,14 @@ const createInvoice = async (req, res) => {
         // Ledger resolution happens INSIDE the transaction (see below) to avoid snapshot isolation FK violations
 
 
+        const companyRec = await prisma.company.findUnique({
+            where: { id: parseInt(companyId) },
+            select: { state: true }
+        });
+        const compStateStr = (companyRec?.state || '').toLowerCase().trim();
+        const custStateStr = (req.body.billingState || customer?.billingState || '').toLowerCase().trim();
+        const isInterState = Boolean(compStateStr && custStateStr && compStateStr !== custStateStr);
+
         let subtotal = 0;
         let totalDiscount = 0;
         let lineTaxSum = 0;
@@ -261,6 +269,20 @@ const createInvoice = async (req, res) => {
             const lineTax = (lineTaxable * itemTaxRate) / 100;
             const lineTotal = lineTaxable + lineTax;
 
+            let cgstRate = 0, sgstRate = 0, igstRate = 0;
+            let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+            if (itemTaxRate > 0) {
+                if (isInterState) {
+                    igstRate = itemTaxRate;
+                    igstAmount = lineTax;
+                } else {
+                    cgstRate = itemTaxRate / 2;
+                    sgstRate = itemTaxRate / 2;
+                    cgstAmount = lineTax / 2;
+                    sgstAmount = lineTax / 2;
+                }
+            }
+
             subtotal += lineGross;
             totalDiscount += itemDiscount;
             lineTaxSum += lineTax;
@@ -274,6 +296,12 @@ const createInvoice = async (req, res) => {
                 discount: itemDiscount,
                 amount: lineTotal,
                 taxRate: itemTaxRate,
+                cgstRate,
+                sgstRate,
+                igstRate,
+                cgstAmount,
+                sgstAmount,
+                igstAmount,
                 warehouseId: item.warehouseId ? parseInt(item.warehouseId) : null,
                 uomId: item.uomId ? parseInt(item.uomId) : null
             };
@@ -288,10 +316,11 @@ const createInvoice = async (req, res) => {
             totalAmount = baseTotal - overallDiscount;
         }
 
-        // Calculate Other Charges total and add to invoice total
+        // Calculate Other Charges and Round Off
         const otherChargesArr = Array.isArray(req.body.otherCharges) ? req.body.otherCharges : [];
         const otherChargesTotal = otherChargesArr.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
-        totalAmount = totalAmount + otherChargesTotal;
+        const roundOffVal = parseFloat(req.body.roundOffAmount || req.body.roundOff || 0);
+        totalAmount = totalAmount + otherChargesTotal + roundOffVal;
 
         const result = await prisma.$transaction(async (tx) => {
 
@@ -342,6 +371,7 @@ const createInvoice = async (req, res) => {
                     subtotal,
                     discountAmount: totalDiscount,
                     taxAmount: finalTax,
+                    roundOffAmount: roundOffVal,
                     totalAmount,
                     balanceAmount: totalAmount,
                     currency: docCurrency,
@@ -373,6 +403,12 @@ const createInvoice = async (req, res) => {
                             discount: i.discount,
                             amount: i.amount,
                             taxRate: i.taxRate,
+                            cgstRate: i.cgstRate,
+                            sgstRate: i.sgstRate,
+                            igstRate: i.igstRate,
+                            cgstAmount: i.cgstAmount,
+                            sgstAmount: i.sgstAmount,
+                            igstAmount: i.igstAmount,
                             warehouseId: i.warehouseId,
                             uomId: i.uomId
                         }))
@@ -775,34 +811,54 @@ const createInvoice = async (req, res) => {
                 data: { currentBalance: { increment: ledgerSubtotal } }
             });
 
-            // 2. Handle Tax (DR Customer, CR Tax Payable)
-            if (finalTax > 0 && taxLedger) {
-                await tx.transaction.create({
-                    data: {
-                        date: new Date(date),
-                        voucherType: 'SALES',
-                        voucherNumber: invoiceNumber,
-                        debitLedgerId: customerLedgerId,
-                        creditLedgerId: taxLedger.id,
-                        amount: ledgerTax,
-                        narration: `Tax on Sale: ${invoiceNumber}`,
-                        companyId: parseInt(companyId),
-                        journalEntryId: journal.id,
-                        invoiceId: invoice.id
-                    }
-                });
+            // 2. Handle Tax (DR Customer, CR CGST/SGST/IGST Output or Tax Payable)
+            if (finalTax > 0) {
+                const totalCGST = invoiceItems.reduce((s, i) => s + (i.cgstAmount || 0), 0);
+                const totalSGST = invoiceItems.reduce((s, i) => s + (i.sgstAmount || 0), 0);
+                const totalIGST = invoiceItems.reduce((s, i) => s + (i.igstAmount || 0), 0);
 
-                // Customer receivable increases by tax amount
-                await tx.ledger.update({
-                    where: { id: customerLedgerId },
-                    data: { currentBalance: { increment: ledgerTax } }
-                });
+                const cgstLedger = (totalCGST > 0) ? (await resolveLedger('CGST Output', 'LIABILITIES') || await resolveLedger('CGST Payable', 'LIABILITIES') || taxLedger) : null;
+                const sgstLedger = (totalSGST > 0) ? (await resolveLedger('SGST Output', 'LIABILITIES') || await resolveLedger('SGST Payable', 'LIABILITIES') || taxLedger) : null;
+                const igstLedger = (totalIGST > 0) ? (await resolveLedger('IGST Output', 'LIABILITIES') || await resolveLedger('IGST Payable', 'LIABILITIES') || taxLedger) : null;
 
-                // Tax Liability increases by tax amount
-                await tx.ledger.update({
-                    where: { id: taxLedger.id },
-                    data: { currentBalance: { increment: ledgerTax } }
-                });
+                const postSalesTaxEntry = async (targetLedger, taxAmt, taxName) => {
+                    const convertedTaxAmt = taxAmt * docExchangeRate;
+                    if (convertedTaxAmt <= 0 || !targetLedger) return;
+                    await tx.transaction.create({
+                        data: {
+                            date: new Date(date),
+                            voucherType: 'SALES',
+                            voucherNumber: invoiceNumber,
+                            debitLedgerId: customerLedgerId,
+                            creditLedgerId: targetLedger.id,
+                            amount: convertedTaxAmt,
+                            narration: `${taxName} on Sale: ${invoiceNumber}`,
+                            companyId: parseInt(companyId),
+                            journalEntryId: journal.id,
+                            invoiceId: invoice.id
+                        }
+                    });
+
+                    // Customer receivable increases by tax amount
+                    await tx.ledger.update({
+                        where: { id: customerLedgerId },
+                        data: { currentBalance: { increment: convertedTaxAmt } }
+                    });
+
+                    // Tax Liability increases by tax amount
+                    await tx.ledger.update({
+                        where: { id: targetLedger.id },
+                        data: { currentBalance: { increment: convertedTaxAmt } }
+                    });
+                };
+
+                if (totalCGST > 0 || totalSGST > 0 || totalIGST > 0) {
+                    if (totalCGST > 0) await postSalesTaxEntry(cgstLedger, totalCGST, 'CGST Output');
+                    if (totalSGST > 0) await postSalesTaxEntry(sgstLedger, totalSGST, 'SGST Output');
+                    if (totalIGST > 0) await postSalesTaxEntry(igstLedger, totalIGST, 'IGST Output');
+                } else if (taxLedger) {
+                    await postSalesTaxEntry(taxLedger, finalTax, 'Tax');
+                }
             }
 
             // 3. Handle Discount Allowed on Sale
@@ -834,6 +890,63 @@ const createInvoice = async (req, res) => {
                     where: { id: customerLedgerId },
                     data: { currentBalance: { decrement: ledgerDiscountAmount } }
                 });
+            }
+
+            // 4. Handle Round Off Accounting Entry
+            if (Math.abs(roundOffVal) > 0.001) {
+                const roundOffLedger = await resolveLedger('Round Off', 'EXPENSES') || await resolveLedger('Round-off', 'EXPENSES') || await resolveLedger('Round Off', 'INCOME');
+                if (roundOffLedger) {
+                    const convertedRoundOff = Math.abs(roundOffVal) * docExchangeRate;
+                    if (roundOffVal > 0) {
+                        // Rounding Up (+): DR Customer (Receivable +), CR Round Off (Income +)
+                        await tx.transaction.create({
+                            data: {
+                                date: new Date(date),
+                                voucherType: 'SALES',
+                                voucherNumber: invoiceNumber,
+                                debitLedgerId: customerLedgerId,
+                                creditLedgerId: roundOffLedger.id,
+                                amount: convertedRoundOff,
+                                narration: `Round-off on Sale: ${invoiceNumber}`,
+                                companyId: parseInt(companyId),
+                                journalEntryId: journal.id,
+                                invoiceId: invoice.id
+                            }
+                        });
+                        await tx.ledger.update({
+                            where: { id: customerLedgerId },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                        await tx.ledger.update({
+                            where: { id: roundOffLedger.id },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                    } else {
+                        // Rounding Down (-): DR Round Off (Expense +), CR Customer (Receivable -)
+                        await tx.transaction.create({
+                            data: {
+                                date: new Date(date),
+                                voucherType: 'SALES',
+                                voucherNumber: invoiceNumber,
+                                debitLedgerId: roundOffLedger.id,
+                                creditLedgerId: customerLedgerId,
+                                amount: convertedRoundOff,
+                                narration: `Round-off on Sale: ${invoiceNumber}`,
+                                companyId: parseInt(companyId),
+                                journalEntryId: journal.id,
+                                invoiceId: invoice.id
+                            }
+                        });
+                        await tx.ledger.update({
+                            where: { id: roundOffLedger.id },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                        await tx.ledger.update({
+                            where: { id: customerLedgerId },
+                            data: { currentBalance: { decrement: convertedRoundOff } }
+                        });
+                    }
+                }
             }
 
             // 3. COGS using Inventory Valuation Method (FIFO or WAC)
@@ -934,12 +1047,9 @@ const createInvoice = async (req, res) => {
             }
 
 
-            // Update Sales Order status if fully invoiced
+            // Update Sales Order status if fully invoiced (guarded to prevent duplicate writes)
             if (salesOrderId) {
-                await tx.salesorder.update({
-                    where: { id: parseInt(salesOrderId) },
-                    data: { status: 'COMPLETED' }
-                });
+                await syncSalesOrderStatus(tx, salesOrderId);
             }
 
             // D. Other Charges — double-entry per charge (DR Customer / CR selected ledger)
@@ -2140,6 +2250,35 @@ const deleteInvoice = async (req, res) => {
                 }
             });
 
+            // Rollback status of linked Delivery Challan and Sales Order
+            if (invoice.deliveryChallanId) {
+                const otherInvoices = await tx.invoice.findMany({
+                    where: { deliveryChallanId: invoice.deliveryChallanId, id: { not: invoice.id } }
+                });
+                if (otherInvoices.length === 0) {
+                    await tx.deliverychallan.update({
+                        where: { id: invoice.deliveryChallanId },
+                        data: { status: 'APPROVED' }
+                    });
+                }
+            }
+
+            if (invoice.salesOrderId) {
+                const otherInvoices = await tx.invoice.findMany({
+                    where: { salesOrderId: invoice.salesOrderId, id: { not: invoice.id } }
+                });
+                const remainingChallans = await tx.deliverychallan.findMany({
+                    where: { salesOrderId: invoice.salesOrderId, status: { notIn: ['CANCELLED', 'DRAFT'] } }
+                });
+
+                if (otherInvoices.length === 0 && remainingChallans.length === 0) {
+                    await tx.salesorder.update({
+                        where: { id: invoice.salesOrderId },
+                        data: { status: 'CONFIRMED' }
+                    });
+                }
+            }
+
             await tx.invoice.delete({ where: { id: invoice.id } });
         }, { timeout: 90000 });
 
@@ -2439,6 +2578,31 @@ const unpayInvoice = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+async function syncSalesOrderStatus(tx, salesOrderId) {
+    if (!salesOrderId) return;
+    const soId = parseInt(salesOrderId);
+    if (isNaN(soId)) return;
+
+    try {
+        const so = await tx.salesorder.findUnique({
+            where: { id: soId },
+            select: { id: true, status: true, manualStatus: true }
+        });
+
+        if (!so || so.manualStatus === true) return;
+
+        // Skip update if already in COMPLETED state
+        if (so.status !== 'COMPLETED') {
+            await tx.salesorder.update({
+                where: { id: soId },
+                data: { status: 'COMPLETED' }
+            });
+        }
+    } catch (e) {
+        console.warn('Could not update salesorder status:', e.message);
+    }
+}
 
 module.exports = {
     createInvoice,

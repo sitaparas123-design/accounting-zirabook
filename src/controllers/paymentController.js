@@ -244,6 +244,32 @@ const createPayment = async (req, res) => {
                 });
             }
 
+            // Tax Deducted / TDS (debit Vendor, credit Tax Liability)
+            const taxVal = parseFloat(req.body.taxAmount || req.body.taxDeductedAmount || 0);
+            const taxTargetLedgerId = req.body.taxLedgerId || req.body.taxDeductedLedgerId;
+            if (taxVal > 0 && taxTargetLedgerId) {
+                const taxInBase = taxVal * paymentRate;
+                transactions.push({
+                    date: date ? new Date(date) : new Date(),
+                    voucherType: 'PAYMENT',
+                    voucherNumber: paymentNumber || payment.paymentNumber,
+                    debitLedgerId: vendor.ledgerId,
+                    creditLedgerId: parseInt(taxTargetLedgerId),
+                    amount: taxInBase,
+                    narration: `Tax/TDS deducted on payment to ${vendor.name}`,
+                    companyId: parseInt(companyId),
+                    paymentId: payment.id
+                });
+                await tx.ledger.update({
+                    where: { id: vendor.ledgerId },
+                    data: { currentBalance: { decrement: taxInBase } }
+                });
+                await tx.ledger.update({
+                    where: { id: parseInt(taxTargetLedgerId) },
+                    data: { currentBalance: { increment: taxInBase } }
+                });
+            }
+
             // Debit Vendor / Credit Bank and/or book Forex entries
             if (Math.abs(totalForexDiff) <= 0.001) {
                 // Standard entry: DR Vendor, CR Bank

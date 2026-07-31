@@ -1,5 +1,4 @@
-const { PrismaClient } = require('../../prisma/generated/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const numberingService = require('../services/numberingService');
 
 // Create Voucher

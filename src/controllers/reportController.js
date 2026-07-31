@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const { getConversionRate, getCompanyCurrency, getCompanyHistoricalCurrency } = require('../utils/currencyConverter');
 
 // Helper to calculate total inventory value for a company as of now
@@ -548,7 +547,7 @@ const getPosReport = async (req, res) => {
         let whereClause = { companyId: parseInt(companyId) };
 
         if (startDate && endDate) {
-            whereClause.createdAt = {
+            whereClause.date = {
                 gte: new Date(startDate),
                 lte: toEndOfDay(endDate)
             };
@@ -564,7 +563,7 @@ const getPosReport = async (req, res) => {
                     }
                 }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: { date: 'desc' }
         });
 
         const companyCurrency = await getCompanyCurrency(companyId);
@@ -610,13 +609,24 @@ const getPosReport = async (req, res) => {
     }
 };
 
-// Get Tax Report (Monthly Breakdown)
+// Get Tax Report (Monthly Breakdown + Date Range Filter)
 const getTaxReport = async (req, res) => {
     try {
         const companyId = req.user?.companyId || req.query.companyId;
         if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const { startDate: qStart, endDate: qEnd, year: qYear } = req.query;
+        let startDate, endDate, year;
+
+        if (qStart && qEnd) {
+            startDate = new Date(qStart);
+            endDate = toEndOfDay(qEnd);
+            year = startDate.getFullYear();
+        } else {
+            year = parseInt(qYear) || new Date().getFullYear();
+            startDate = new Date(`${year}-01-01`);
+            endDate = toEndOfDay(`${year}-12-31`);
+        }
 
         // Fetch Company Details for State comparison
         const company = await prisma.company.findUnique({
@@ -631,20 +641,20 @@ const getTaxReport = async (req, res) => {
             where: {
                 companyId: parseInt(companyId),
                 date: {
-                    gte: new Date(`${year}-01-01`),
-                    lte: new Date(`${year}-12-31`)
+                    gte: startDate,
+                    lte: endDate
                 }
             },
-            include: { customer: { select: { billingState: true } } }
+            include: { customer: { select: { billingState: true } }, invoiceitem: true }
         });
 
         // Fetch POS Invoices (Assume Intra-state/CGST+SGST for simplicity unless customer is tagged)
         const posInvoices = await prisma.posinvoice.findMany({
             where: {
                 companyId: parseInt(companyId),
-                createdAt: {
-                    gte: new Date(`${year}-01-01`),
-                    lte: toEndOfDay(`${year}-12-31`)
+                date: {
+                    gte: startDate,
+                    lte: endDate
                 }
             },
             include: { customer: { select: { billingState: true } } }
@@ -682,12 +692,24 @@ const getTaxReport = async (req, res) => {
 
         for (const inv of invoices) {
             const rate = await getConversionRate(inv.currency || 'USD', companyCurrency);
-            processTax(inv.taxAmount, inv.date, inv.customer?.billingState, incomeStats, rate);
+            const month = new Date(inv.date).getMonth();
+            const items = inv.invoiceitem || [];
+            const hasDetailedGst = items.some(i => (i.cgstAmount || 0) > 0 || (i.sgstAmount || 0) > 0 || (i.igstAmount || 0) > 0);
+
+            if (hasDetailedGst) {
+                for (const item of items) {
+                    incomeStats.CGST[month] += (item.cgstAmount || 0) * rate;
+                    incomeStats.SGST[month] += (item.sgstAmount || 0) * rate;
+                    incomeStats.IGST[month] += (item.igstAmount || 0) * rate;
+                }
+            } else {
+                processTax(inv.taxAmount, inv.date, inv.customer?.billingState, incomeStats, rate);
+            }
         }
 
         for (const pos of posInvoices) {
             const rate = await getConversionRate(pos.currency || histCurr, companyCurrency);
-            processTax(pos.taxAmount, pos.createdAt, pos.customer?.billingState || companyState, incomeStats, rate);
+            processTax(pos.taxAmount, pos.date || pos.createdAt, pos.customer?.billingState || companyState, incomeStats, rate);
         }
 
         // --- 2. EXPENSE TAX (Purchases) ---
@@ -695,11 +717,11 @@ const getTaxReport = async (req, res) => {
             where: {
                 companyId: parseInt(companyId),
                 date: {
-                    gte: new Date(`${year}-01-01`),
-                    lte: toEndOfDay(`${year}-12-31`)
+                    gte: startDate,
+                    lte: endDate
                 }
             },
-            include: { vendor: { select: { billingState: true } } }
+            include: { vendor: { select: { billingState: true } }, purchasebillitem: true }
         });
 
         const expenseStats = {
@@ -710,7 +732,19 @@ const getTaxReport = async (req, res) => {
 
         for (const bill of bills) {
             const rate = await getConversionRate(bill.currency || 'USD', companyCurrency);
-            processTax(bill.taxAmount, bill.date, bill.vendor?.billingState, expenseStats, rate);
+            const month = new Date(bill.date).getMonth();
+            const items = bill.purchasebillitem || [];
+            const hasDetailedGst = items.some(i => (i.cgstAmount || 0) > 0 || (i.sgstAmount || 0) > 0 || (i.igstAmount || 0) > 0);
+
+            if (hasDetailedGst) {
+                for (const item of items) {
+                    expenseStats.CGST[month] += (item.cgstAmount || 0) * rate;
+                    expenseStats.SGST[month] += (item.sgstAmount || 0) * rate;
+                    expenseStats.IGST[month] += (item.igstAmount || 0) * rate;
+                }
+            } else {
+                processTax(bill.taxAmount, bill.date, bill.vendor?.billingState, expenseStats, rate);
+            }
         }
 
         res.status(200).json({
@@ -735,7 +769,7 @@ const getInventorySummary = async (req, res) => {
 
         const { startDate, endDate, warehouseId } = req.query;
 
-        // Get All Stocks
+        // Get All Stocks with product metadata & uoms
         const stockWhere = { product: { companyId: parseInt(companyId) } };
         if (warehouseId && warehouseId !== 'ALL') {
             stockWhere.warehouseId = parseInt(warehouseId);
@@ -744,7 +778,12 @@ const getInventorySummary = async (req, res) => {
         const stocks = await prisma.stock.findMany({
             where: stockWhere,
             include: {
-                product: { include: { category: true } },
+                product: {
+                    include: {
+                        category: true,
+                        uom: true
+                    }
+                },
                 warehouse: true
             }
         });
@@ -765,26 +804,45 @@ const getInventorySummary = async (req, res) => {
         const histCurr = await getCompanyHistoricalCurrency(companyId);
         const rate = await getConversionRate(histCurr, companyCurrency);
 
-        // Map data
+        // Map data per product-warehouse key
         const reportMap = {};
 
         // Initialize from Stock (Current Closing)
         stocks.forEach(stk => {
             const key = `${stk.productId}-${stk.warehouseId}`;
+            const p = stk.product || {};
             reportMap[key] = {
                 id: stk.id,
                 productId: stk.productId,
-                productName: stk.product.name,
-                sku: stk.product.sku || 'N/A',
-                category: stk.product.category?.name || 'Uncategorized',
+                productName: p.name || 'Unknown Item',
+                sku: p.sku || 'N/A',
+                hsn: p.hsn || 'N/A',
+                barcode: p.barcode || 'N/A',
+                unit: p.uom?.name || p.unit || 'Pcs',
+                category: p.category?.name || 'Uncategorized',
                 warehouseId: stk.warehouseId,
-                warehouse: stk.warehouse.name,
-                price: (stk.product.salePrice || 0) * rate, // Sale Price
-                costPrice: (stk.product.averageCost || stk.product.purchasePrice || stk.product.initialCost || 0) * rate, // Cost Price
-                closing: stk.quantity, // starts as current stock, will adjust if date filter is set
+                warehouse: stk.warehouse?.name || 'Main Warehouse',
+                salePrice: (p.salePrice || 0) * rate,
+                purchasePrice: (p.purchasePrice || 0) * rate,
+                averageCost: (p.averageCost || 0) * rate,
+                initialCost: (p.initialCost || 0) * rate,
+                costPrice: (p.averageCost || p.purchasePrice || p.initialCost || 0) * rate,
+                price: (p.salePrice || 0) * rate,
+                closing: stk.quantity,
                 opening: 0,
+                initialStock: 0,
                 inward: 0,
                 outward: 0,
+                // Channel breakdown counters
+                salesInvoiceQty: 0,
+                posQty: 0,
+                purchaseBillQty: 0,
+                salesReturnQty: 0,
+                purchaseReturnQty: 0,
+                transferInQty: 0,
+                transferOutQty: 0,
+                adjustmentQty: 0,
+                minOrderQty: parseFloat(stk.minOrderQty || p.minOrderQty || p.minStockLevel || p.reorderLevel || 10),
                 status: 'In Stock'
             };
         });
@@ -793,25 +851,37 @@ const getInventorySummary = async (req, res) => {
         const start = startDate ? new Date(startDate) : null;
         const end = endDate ? new Date(endDate) : null;
 
-        // If dates are provided, we need to adjust the closing/opening stock based on transaction dates.
         transactions.forEach(txn => {
             const txnDate = new Date(txn.date);
+            const rLower = (txn.reason || '').toLowerCase();
+            const isOpeningStockTxn = rLower.includes('opening') || rLower.includes('initial');
 
             // Handle OUT from warehouse
             if (txn.fromWarehouseId) {
-                // If filtering by a specific warehouse, skip if it doesn't match
                 if (warehouseId && warehouseId !== 'ALL' && txn.fromWarehouseId !== parseInt(warehouseId)) {
                     // skip
                 } else {
                     const key = `${txn.productId}-${txn.fromWarehouseId}`;
                     if (reportMap[key]) {
                         if (end && txnDate > end) {
-                            // transaction happened after endDate, so the stock back then was higher
                             reportMap[key].closing += txn.quantity;
-                        } else if (start && txnDate >= start && (!end || txnDate <= end)) {
+                        } else if ((!start || txnDate >= start) && (!end || txnDate <= end)) {
                             reportMap[key].outward += txn.quantity;
-                        } else if (!start && (!end || txnDate <= end)) {
-                            reportMap[key].outward += txn.quantity;
+
+                            // Channel categorization
+                            if (rLower.includes('pos')) {
+                                reportMap[key].posQty += txn.quantity;
+                            } else if (rLower.includes('sales invoice') || rLower.includes('inv-')) {
+                                reportMap[key].salesInvoiceQty += txn.quantity;
+                            } else if (rLower.includes('purchase return') || rLower.includes('vendor return')) {
+                                reportMap[key].purchaseReturnQty += txn.quantity;
+                            } else if (rLower.includes('transfer')) {
+                                reportMap[key].transferOutQty += txn.quantity;
+                            } else if (rLower.includes('adjustment')) {
+                                reportMap[key].adjustmentQty -= txn.quantity;
+                            } else {
+                                reportMap[key].salesInvoiceQty += txn.quantity;
+                            }
                         }
                     }
                 }
@@ -819,40 +889,141 @@ const getInventorySummary = async (req, res) => {
 
             // Handle IN to warehouse
             if (txn.toWarehouseId) {
-                // If filtering by a specific warehouse, skip if it doesn't match
                 if (warehouseId && warehouseId !== 'ALL' && txn.toWarehouseId !== parseInt(warehouseId)) {
                     // skip
                 } else {
                     const key = `${txn.productId}-${txn.toWarehouseId}`;
                     if (reportMap[key]) {
                         if (end && txnDate > end) {
-                            // transaction happened after endDate, so the stock back then was lower
                             reportMap[key].closing -= txn.quantity;
-                        } else if (start && txnDate >= start && (!end || txnDate <= end)) {
-                            reportMap[key].inward += txn.quantity;
-                        } else if (!start && (!end || txnDate <= end)) {
-                            reportMap[key].inward += txn.quantity;
+                        } else if ((!start || txnDate >= start) && (!end || txnDate <= end)) {
+                            if (isOpeningStockTxn) {
+                                reportMap[key].initialStock += txn.quantity;
+                            } else {
+                                reportMap[key].inward += txn.quantity;
+
+                                // Channel categorization
+                                if (rLower.includes('purchase bill') || rLower.includes('grn') || rLower.includes('bill-')) {
+                                    reportMap[key].purchaseBillQty += txn.quantity;
+                                } else if (rLower.includes('sales return') || rLower.includes('customer return')) {
+                                    reportMap[key].salesReturnQty += txn.quantity;
+                                } else if (rLower.includes('transfer')) {
+                                    reportMap[key].transferInQty += txn.quantity;
+                                } else if (rLower.includes('adjustment')) {
+                                    reportMap[key].adjustmentQty += txn.quantity;
+                                } else {
+                                    reportMap[key].purchaseBillQty += txn.quantity;
+                                }
+                            }
                         }
                     }
                 }
             }
         });
 
-        // Now Calculate Opening: Opening = Closing - Inward + Outward
-        Object.values(reportMap).forEach(item => {
-            item.opening = item.closing - item.inward + item.outward;
+        // Compute Opening & Values
+        const rawList = Object.values(reportMap);
+        rawList.forEach(item => {
+            if (start) {
+                item.opening = item.closing - item.inward + item.outward;
+            } else {
+                item.opening = item.initialStock || Math.max(0, item.closing - item.inward + item.outward);
+            }
             item.openingValue = item.opening * item.costPrice;
             item.inwardValue = item.inward * item.costPrice;
             item.outwardValue = item.outward * item.costPrice;
-            item.totalValue = item.closing * item.costPrice; // cost-based valuation
-            item.salesValue = item.closing * item.price; // salePrice-based valuation
+            item.totalValue = item.closing * item.costPrice; // Cost-based valuation
+            item.salesValue = item.closing * item.salePrice; // Retail-based valuation
 
+            const threshold = parseFloat(item.minOrderQty) || 10;
             if (item.closing <= 0) item.status = 'Out of Stock';
-            else if (item.closing < 10) item.status = 'Low Stock';
+            else if (item.closing < threshold) item.status = 'Low Stock';
             else item.status = 'In Stock';
         });
 
-        res.status(200).json({ success: true, data: Object.values(reportMap) });
+        // Build Consolidated Item-Wise View across warehouses
+        const itemConsolidatedMap = {};
+        rawList.forEach(stk => {
+            const pid = stk.productId;
+            if (!itemConsolidatedMap[pid]) {
+                itemConsolidatedMap[pid] = {
+                    productId: pid,
+                    productName: stk.productName,
+                    sku: stk.sku,
+                    hsn: stk.hsn,
+                    barcode: stk.barcode,
+                    unit: stk.unit,
+                    category: stk.category,
+                    salePrice: stk.salePrice,
+                    purchasePrice: stk.purchasePrice,
+                    averageCost: stk.averageCost,
+                    initialCost: stk.initialCost,
+                    costPrice: stk.costPrice,
+                    minOrderQty: stk.minOrderQty,
+                    opening: 0,
+                    inward: 0,
+                    outward: 0,
+                    closing: 0,
+                    salesInvoiceQty: 0,
+                    posQty: 0,
+                    purchaseBillQty: 0,
+                    salesReturnQty: 0,
+                    purchaseReturnQty: 0,
+                    transferInQty: 0,
+                    transferOutQty: 0,
+                    adjustmentQty: 0,
+                    openingValue: 0,
+                    inwardValue: 0,
+                    outwardValue: 0,
+                    totalValue: 0,
+                    salesValue: 0,
+                    warehouses: []
+                };
+            }
+
+            const c = itemConsolidatedMap[pid];
+            c.opening += stk.opening;
+            c.inward += stk.inward;
+            c.outward += stk.outward;
+            c.closing += stk.closing;
+            c.salesInvoiceQty += stk.salesInvoiceQty;
+            c.posQty += stk.posQty;
+            c.purchaseBillQty += stk.purchaseBillQty;
+            c.salesReturnQty += stk.salesReturnQty;
+            c.purchaseReturnQty += stk.purchaseReturnQty;
+            c.transferInQty += stk.transferInQty;
+            c.transferOutQty += stk.transferOutQty;
+            c.adjustmentQty += stk.adjustmentQty;
+            c.openingValue += stk.openingValue;
+            c.inwardValue += stk.inwardValue;
+            c.outwardValue += stk.outwardValue;
+            c.totalValue += stk.totalValue;
+            c.salesValue += stk.salesValue;
+
+            c.warehouses.push({
+                warehouseId: stk.warehouseId,
+                warehouseName: stk.warehouse,
+                opening: stk.opening,
+                inward: stk.inward,
+                outward: stk.outward,
+                closing: stk.closing,
+                totalValue: stk.totalValue,
+                status: stk.status
+            });
+        });
+
+        Object.values(itemConsolidatedMap).forEach(item => {
+            const threshold = parseFloat(item.minOrderQty) || 10;
+            if (item.closing <= 0) item.status = 'Out of Stock';
+            else if (item.closing < threshold) item.status = 'Low Stock';
+            else item.status = 'In Stock';
+        });
+
+        res.status(200).json({
+            success: true,
+            data: rawList,
+            itemWise: Object.values(itemConsolidatedMap)
+        });
 
     } catch (error) {
         console.error('Error fetching Inventory Summary:', error);
@@ -1025,18 +1196,53 @@ const getBalanceSheet = async (req, res) => {
         });
         reportData.equity.total += finalNetProfit;
 
-        // 4. Dynamic Opening Balance Equity Adjustment
-        // dynamicOBE is the exact value needed to balance the equation:
-        // Assets = Liabilities + OtherEquity + NetProfit + OBE
-        const totalLiabilities = reportData.liabilities.total;
-        const totalOtherEquity = reportData.equity.total - finalNetProfit; // subtract NP since it was already added
-        const dynamicOBE = reportData.assets.total - totalLiabilities - totalOtherEquity - finalNetProfit;
-
-        reportData.equity.items.push({
-            name: 'Opening Balance Equity',
-            value: dynamicOBE
+        // 4. Legitimate Opening Balance Equity & Discrepancy Detection
+        const hasExplicitObeLedger = reportData.equity.items.some(item => {
+            const n = (item.name || '').toLowerCase();
+            return n.includes('opening balance equity') || n === 'obe';
         });
-        reportData.equity.total += dynamicOBE;
+
+        // If no explicit OBE ledger exists, compute legitimate setup OBE from initial setup opening balances
+        if (!hasExplicitObeLedger) {
+            let assetOpenSum = 0;
+            let liabilityOpenSum = 0;
+            let equityOpenSum = 0;
+
+            ledgers.forEach(l => {
+                const open = (parseFloat(l.openingBalance || 0)) * rate;
+                const gType = l.accountgroup?.type;
+                if (gType === 'ASSETS') assetOpenSum += open;
+                else if (gType === 'LIABILITIES') liabilityOpenSum += open;
+                else if (gType === 'EQUITY') equityOpenSum += open;
+            });
+
+            const setupOBE = assetOpenSum - liabilityOpenSum - equityOpenSum;
+            if (Math.abs(setupOBE) > 0.001) {
+                reportData.equity.items.push({
+                    name: 'Opening Balance Equity',
+                    value: setupOBE
+                });
+                reportData.equity.total += setupOBE;
+            }
+        }
+
+        // Calculate imbalance / posting discrepancy
+        // Assets = Liabilities + Total Equity
+        const totalAssets = reportData.assets.total;
+        const totalLiabilities = reportData.liabilities.total;
+        const totalEquity = reportData.equity.total;
+        const discrepancy = totalAssets - (totalLiabilities + totalEquity);
+
+        reportData.discrepancy = Math.abs(discrepancy) > 0.01 ? Math.round(discrepancy * 100) / 100 : 0;
+
+        if (Math.abs(discrepancy) > 0.01) {
+            reportData.equity.items.push({
+                name: 'Unreconciled Imbalance / Discrepancy',
+                value: discrepancy,
+                isDiscrepancy: true
+            });
+            reportData.equity.total += discrepancy;
+        }
 
         res.status(200).json({ success: true, data: reportData });
 
@@ -1046,59 +1252,204 @@ const getBalanceSheet = async (req, res) => {
     }
 };
 
-// Get Cash Flow Statement (Monthly Hybrid: Accrual + Cash)
+// Get Cash Flow Statement (Standard GAAP: Operating, Investing, Financing Activities)
 const getCashFlowStatement = async (req, res) => {
     try {
         const companyId = req.user?.companyId || req.query.companyId;
         if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 
         const year = parseInt(req.query.year) || new Date().getFullYear();
-
         const companyCurrency = await getCompanyCurrency(companyId);
 
-        // Helpers
-        const getMonthlySum = async (model, dateField = 'date', sumField = 'amount') => {
-            const items = await model.findMany({
+        // Fetch Cash and Bank Ledgers for Company
+        const allCompanyLedgers = await prisma.ledger.findMany({
+            where: { companyId: parseInt(companyId) },
+            select: { id: true, name: true, openingBalance: true, accountgroup: { select: { name: true, type: true } } }
+        });
+
+        const cashBankLedgers = allCompanyLedgers.filter(l => {
+            const groupName = l.accountgroup?.name?.toLowerCase() || '';
+            const ledgerName = l.name?.toLowerCase() || '';
+            return groupName.includes('bank') || groupName.includes('cash') || ledgerName.includes('cash') || ledgerName.includes('bank');
+        });
+
+        const cashBankLedgerIds = new Set(cashBankLedgers.map(l => l.id));
+
+        // Calculate Opening Cash Balance before Jan 1 of the target year
+        let openingCash = 0;
+        for (const ledger of cashBankLedgers) {
+            const isDebit = ledger.accountgroup?.type === 'ASSETS' || ledger.accountgroup?.type === 'EXPENSES';
+            const ob = (ledger.openingBalance || 0) * (isDebit ? 1 : -1);
+
+            // Fetch receipts prior to start of year for this bank account
+            const priorReceipts = await prisma.receipt.aggregate({
                 where: {
-                    companyId: parseInt(companyId),
-                    [dateField]: {
-                        gte: new Date(`${year}-01-01`),
-                        lte: toEndOfDay(`${year}-12-31`)
-                    }
-                }
+                    cashBankAccountId: ledger.id,
+                    date: { lt: new Date(`${year}-01-01`) },
+                    companyId: parseInt(companyId)
+                },
+                _sum: { amount: true }
             });
 
-            // Aggregate by month (0-11)
-            const monthly = Array(12).fill(0);
-            for (const item of items) {
-                const d = new Date(item[dateField]);
-                const month = d.getMonth(); // 0-11
-                const rate = await getConversionRate(item.currency || 'USD', companyCurrency);
-                const val = (item[sumField] || 0) * rate;
-                monthly[month] += val;
+            // Fetch payments prior to start of year for this bank account
+            const priorPayments = await prisma.payment.aggregate({
+                where: {
+                    cashBankAccountId: ledger.id,
+                    date: { lt: new Date(`${year}-01-01`) },
+                    companyId: parseInt(companyId)
+                },
+                _sum: { amount: true }
+            });
+
+            const netPrior = (priorReceipts._sum.amount || 0) - (priorPayments._sum.amount || 0);
+            openingCash += (ob + netPrior);
+        }
+
+        // Initialize 12-month activity trackers
+        const operatingInflows = Array(12).fill(0);
+        const operatingOutflows = Array(12).fill(0);
+        const investingInflows = Array(12).fill(0);
+        const investingOutflows = Array(12).fill(0);
+        const financingInflows = Array(12).fill(0);
+        const financingOutflows = Array(12).fill(0);
+
+        // Legacy tracker arrays
+        const receiptsArr = Array(12).fill(0);
+        const paymentsArr = Array(12).fill(0);
+
+        // 1. Process Receipts (Cash Inflows)
+        const receipts = await prisma.receipt.findMany({
+            where: {
+                companyId: parseInt(companyId),
+                date: {
+                    gte: new Date(`${year}-01-01`),
+                    lte: toEndOfDay(`${year}-12-31`)
+                }
+            },
+            include: { cashBankAccount: { include: { accountgroup: true } } }
+        });
+
+        for (const item of receipts) {
+            const d = new Date(item.date);
+            const month = d.getMonth();
+            const rate = await getConversionRate(item.currency || 'USD', companyCurrency);
+            const val = (item.amount || 0) * rate;
+
+            receiptsArr[month] += val;
+
+            const groupName = item.cashBankAccount?.accountgroup?.name?.toLowerCase() || '';
+            const groupType = item.cashBankAccount?.accountgroup?.type || '';
+
+            if (groupType === 'LIABILITIES' && (groupName.includes('loan') || groupName.includes('borrowing'))) {
+                financingInflows[month] += val;
+            } else if (groupType === 'EQUITY' || groupName.includes('capital') || groupName.includes('equity')) {
+                financingInflows[month] += val;
+            } else if (groupType === 'ASSETS' && (groupName.includes('fixed') || groupName.includes('property') || groupName.includes('equipment'))) {
+                investingInflows[month] += val;
+            } else {
+                // Default: Operating Customer / Revenue Receipt
+                operatingInflows[month] += val;
             }
-            return monthly;
-        };
+        }
 
-        // 1. Fetch Income Components
-        // Revenue -> Receipts (Cash In)
-        const receipts = await getMonthlySum(prisma.receipt, 'date', 'amount');
-        // Invoice -> Sales (Accrual)
-        const invoices = await getMonthlySum(prisma.invoice, 'date', 'totalAmount');
+        // 2. Process Payments (Cash Outflows)
+        const payments = await prisma.payment.findMany({
+            where: {
+                companyId: parseInt(companyId),
+                date: {
+                    gte: new Date(`${year}-01-01`),
+                    lte: toEndOfDay(`${year}-12-31`)
+                }
+            },
+            include: { bankLedger: { include: { accountgroup: true } } }
+        });
 
-        // 2. Fetch Expense Components
-        // Payment -> Payments (Cash Out)
-        const payments = await getMonthlySum(prisma.payment, 'date', 'amount');
-        // Bill -> Purchases (Accrual)
-        const bills = await getMonthlySum(prisma.purchasebill, 'date', 'totalAmount');
+        for (const item of payments) {
+            const d = new Date(item.date);
+            const month = d.getMonth();
+            const rate = await getConversionRate(item.currency || 'USD', companyCurrency);
+            const val = (item.amount || 0) * rate;
+
+            paymentsArr[month] += val;
+
+            const groupName = item.bankLedger?.accountgroup?.name?.toLowerCase() || '';
+            const groupType = item.bankLedger?.accountgroup?.type || '';
+
+            if (groupType === 'ASSETS' && (groupName.includes('fixed') || groupName.includes('property') || groupName.includes('equipment') || groupName.includes('machinery') || groupName.includes('vehicle'))) {
+                investingOutflows[month] += val;
+            } else if (groupType === 'LIABILITIES' && (groupName.includes('loan') || groupName.includes('borrowing') || groupName.includes('debt'))) {
+                financingOutflows[month] += val;
+            } else if (groupType === 'EQUITY' || groupName.includes('drawing') || groupName.includes('dividend')) {
+                financingOutflows[month] += val;
+            } else {
+                // Default: Operating Supplier / Expense Payment
+                operatingOutflows[month] += val;
+            }
+        }
+
+        // 3. Process Accrual Sales Invoices & Purchase Bills for legacy arrays
+        const invoices = await prisma.invoice.findMany({
+            where: { companyId: parseInt(companyId), date: { gte: new Date(`${year}-01-01`), lte: toEndOfDay(`${year}-12-31`) } }
+        });
+        const invoicesArr = Array(12).fill(0);
+        for (const item of invoices) {
+            const month = new Date(item.date).getMonth();
+            const rate = await getConversionRate(item.currency || 'USD', companyCurrency);
+            invoicesArr[month] += (item.totalAmount || 0) * rate;
+        }
+
+        const bills = await prisma.purchasebill.findMany({
+            where: { companyId: parseInt(companyId), date: { gte: new Date(`${year}-01-01`), lte: toEndOfDay(`${year}-12-31`) } }
+        });
+        const billsArr = Array(12).fill(0);
+        for (const item of bills) {
+            const month = new Date(item.date).getMonth();
+            const rate = await getConversionRate(item.currency || 'USD', companyCurrency);
+            billsArr[month] += (item.totalAmount || 0) * rate;
+        }
+
+        // Calculate Net Activity arrays & Cumulative Cash Balances
+        const operatingNet = operatingInflows.map((inflow, i) => inflow - operatingOutflows[i]);
+        const investingNet = investingInflows.map((inflow, i) => inflow - investingOutflows[i]);
+        const financingNet = financingInflows.map((inflow, i) => inflow - financingOutflows[i]);
+        const netCashFlow = operatingNet.map((op, i) => op + investingNet[i] + financingNet[i]);
+
+        const openingCashArr = Array(12).fill(0);
+        const closingCashArr = Array(12).fill(0);
+
+        let runningCash = openingCash;
+        for (let m = 0; m < 12; m++) {
+            openingCashArr[m] = runningCash;
+            runningCash += netCashFlow[m];
+            closingCashArr[m] = runningCash;
+        }
 
         res.status(200).json({
             success: true,
             data: {
-                revenue: receipts,
-                invoice: invoices,
-                payment: payments,
-                bill: bills
+                operating: {
+                    inflows: operatingInflows,
+                    outflows: operatingOutflows,
+                    net: operatingNet
+                },
+                investing: {
+                    inflows: investingInflows,
+                    outflows: investingOutflows,
+                    net: investingNet
+                },
+                financing: {
+                    inflows: financingInflows,
+                    outflows: financingOutflows,
+                    net: financingNet
+                },
+                netCashFlow,
+                openingCash: openingCashArr,
+                closingCash: closingCashArr,
+                // Legacy fields for backward compatibility
+                revenue: receiptsArr,
+                invoice: invoicesArr,
+                payment: paymentsArr,
+                bill: billsArr
             }
         });
 
@@ -1174,12 +1525,15 @@ const getProfitLoss = async (req, res) => {
                 otherExpense: { items: [], total: 0 }
             };
 
+            const isFullYear = (new Date(start).getMonth() === 0 && new Date(start).getDate() === 1 && new Date(end).getMonth() === 11 && new Date(end).getDate() >= 30);
+
             const ledgerValues = {}; // To store net value per ledger
             ledgers.forEach(l => {
-                const openBal = parseFloat(l.openingBalance || 0) * rate;
+                // Opening balances of INCOME and EXPENSE ledgers are nominal figures and are excluded for custom period P&L (e.g. July 1 - July 31)
+                const openBal = isFullYear ? (parseFloat(l.openingBalance || 0) * rate) : 0;
                 ledgerValues[l.id] = openBal;
 
-                // Income and Expenses opening balances contribute to the net profit
+                // Income and Expenses opening balances contribute to the net profit only in full-year context
                 if (l.accountgroup.type === 'INCOME') totalIncome += openBal;
                 if (l.accountgroup.type === 'EXPENSES') totalExpense += openBal;
             });
@@ -1324,16 +1678,24 @@ const getProfitLoss = async (req, res) => {
     }
 };
 
-// Get VAT Report (Detailed Transaction List)
+// Get VAT Report (Detailed Transaction List + Date Range Filter)
 const getVatReport = async (req, res) => {
     try {
         const companyId = req.user?.companyId || req.query.companyId;
         if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 
-        const year = parseInt(req.query.year) || new Date().getFullYear();
-        const startDate = new Date(`${year}-01-01`);
-        const endDate = new Date(`${year}-12-31`);
-        endDate.setHours(23, 59, 59, 999);
+        const { startDate: qStart, endDate: qEnd, year: qYear } = req.query;
+        let startDate, endDate, year;
+
+        if (qStart && qEnd) {
+            startDate = new Date(qStart);
+            endDate = toEndOfDay(qEnd);
+            year = startDate.getFullYear();
+        } else {
+            year = parseInt(qYear) || new Date().getFullYear();
+            startDate = new Date(`${year}-01-01`);
+            endDate = toEndOfDay(`${year}-12-31`);
+        }
 
         // 1. Fetch Sales (Invoices)
         const invoices = await prisma.invoice.findMany({
@@ -1348,7 +1710,7 @@ const getVatReport = async (req, res) => {
         const posInvoices = await prisma.posinvoice.findMany({
             where: {
                 companyId: parseInt(companyId),
-                createdAt: { gte: startDate, lte: endDate }
+                date: { gte: startDate, lte: endDate }
             },
             include: { customer: { select: { name: true } } }
         });
@@ -1401,7 +1763,7 @@ const getVatReport = async (req, res) => {
                 taxableAmount: taxable,
                 vatAmount: tax,
                 vatRate: rate,
-                date: pos.createdAt
+                date: pos.date || pos.createdAt
             });
         }
 

@@ -250,6 +250,33 @@ const createReceipt = async (req, res) => {
                 });
             }
 
+            // Debit Tax Deducted (TDS)
+            const taxVal = parseFloat(req.body.taxDeductedAmount || req.body.taxAmount || 0);
+            const taxTargetLedgerId = req.body.taxDeductedLedgerId || req.body.taxLedgerId;
+            if (taxVal > 0 && taxTargetLedgerId) {
+                const taxInBase = taxVal * receiptRate;
+                transactions.push({
+                    date: new Date(date),
+                    voucherType: 'RECEIPT',
+                    voucherNumber: receiptNumber,
+                    debitLedgerId: parseInt(taxTargetLedgerId),
+                    creditLedgerId: customer.ledgerId,
+                    amount: taxInBase,
+                    narration: `Tax/TDS deducted on payment from ${customer.name}`,
+                    companyId: parseInt(companyId),
+                    journalEntryId: journalEntry.id,
+                    receiptId: receipt.id
+                });
+                await tx.ledger.update({
+                    where: { id: parseInt(taxTargetLedgerId) },
+                    data: { currentBalance: { increment: taxInBase } }
+                });
+                await tx.ledger.update({
+                    where: { id: customer.ledgerId },
+                    data: { currentBalance: { decrement: taxInBase } }
+                });
+            }
+
             // Debit Bank / Credit Customer and/or book Forex entries
             if (Math.abs(totalForexDiff) <= 0.001) {
                 // No forex difference (or same rates): standard DR Bank / CR Customer

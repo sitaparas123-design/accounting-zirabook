@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const { getInventoryConfig, consumeStock } = require('../services/inventoryValuationService');
 const numberingService = require('../services/numberingService');
 
@@ -404,8 +403,20 @@ const createPOSInvoice = async (req, res) => {
 const getPOSInvoices = async (req, res) => {
     try {
         const companyId = req.user?.companyId || req.query.companyId;
+        const { startDate, endDate } = req.query;
+
+        const whereClause = { companyId: parseInt(companyId) };
+        if (startDate && endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            whereClause.date = {
+                gte: new Date(startDate),
+                lte: end
+            };
+        }
+
         const invoices = await prisma.posinvoice.findMany({
-            where: { companyId: parseInt(companyId) },
+            where: whereClause,
             include: {
                 customer: true,
                 posinvoiceitem: { include: { product: true, warehouse: true } },
@@ -415,7 +426,7 @@ const getPOSInvoices = async (req, res) => {
                     }
                 }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: { date: 'desc' }
         });
 
         const salesReturns = await prisma.salesreturn.findMany({

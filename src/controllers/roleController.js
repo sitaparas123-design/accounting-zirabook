@@ -1,5 +1,4 @@
-const { PrismaClient } = require('../../prisma/generated/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 
 // Create Role
 const createRole = async (req, res) => {

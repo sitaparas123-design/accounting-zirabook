@@ -1,6 +1,5 @@
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const numberingService = require('../services/numberingService');
 const {
     getInventoryConfig,
@@ -137,6 +136,18 @@ const createBill = async (req, res) => {
             }
         }
 
+        const companyRec = await prisma.company.findUnique({
+            where: { id: parseInt(companyId) },
+            select: { state: true }
+        });
+        const compStateStr = (companyRec?.state || '').toLowerCase().trim();
+        const vendorRec = await prisma.vendor.findUnique({
+            where: { id: parseInt(vendorId) },
+            select: { billingState: true }
+        });
+        const vendStateStr = (req.body.billingState || vendorRec?.billingState || '').toLowerCase().trim();
+        const isInterState = Boolean(compStateStr && vendStateStr && compStateStr !== vendStateStr);
+
         let calculatedSubtotal = 0;
         let calculatedItemDiscount = 0;
         let calculatedTaxSum = 0;
@@ -152,6 +163,20 @@ const createBill = async (req, res) => {
             const lineTax = (lineTaxable * taxRate) / 100;
             const lineTotal = lineTaxable + lineTax;
 
+            let cgstRate = 0, sgstRate = 0, igstRate = 0;
+            let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+            if (taxRate > 0) {
+                if (isInterState) {
+                    igstRate = taxRate;
+                    igstAmount = lineTax;
+                } else {
+                    cgstRate = taxRate / 2;
+                    sgstRate = taxRate / 2;
+                    cgstAmount = lineTax / 2;
+                    sgstAmount = lineTax / 2;
+                }
+            }
+
             calculatedSubtotal += lineGross;
             calculatedItemDiscount += discount;
             calculatedTaxSum += lineTax;
@@ -165,6 +190,12 @@ const createBill = async (req, res) => {
                 rate: rate,
                 discount: discount,
                 taxRate: taxRate,
+                cgstRate,
+                sgstRate,
+                igstRate,
+                cgstAmount,
+                sgstAmount,
+                igstAmount,
                 amount: lineTotal
             };
         });
@@ -186,7 +217,8 @@ const createBill = async (req, res) => {
 
         const otherChargesArr = Array.isArray(req.body.otherCharges) ? req.body.otherCharges : [];
         const otherChargesTotal = otherChargesArr.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
-        totalAmountValue = totalAmountValue + otherChargesTotal;
+        const roundOffVal = parseFloat(req.body.roundOffAmount || req.body.roundOff || 0);
+        totalAmountValue = totalAmountValue + otherChargesTotal + roundOffVal;
 
         const result = await prisma.$transaction(async (tx) => {
             // 1. Create Purchase Bill
@@ -206,6 +238,7 @@ const createBill = async (req, res) => {
                     subtotal: calculatedSubtotal,
                     discountAmount: totalDiscount,
                     taxAmount: finalTax,
+                    roundOffAmount: roundOffVal,
                     totalAmount: totalAmountValue,
                     balanceAmount: totalAmountValue,
                     currency: docCurrency,
@@ -237,6 +270,12 @@ const createBill = async (req, res) => {
                             rate: i.rate,
                             discount: i.discount,
                             taxRate: i.taxRate,
+                            cgstRate: i.cgstRate,
+                            sgstRate: i.sgstRate,
+                            igstRate: i.igstRate,
+                            cgstAmount: i.cgstAmount,
+                            sgstAmount: i.sgstAmount,
+                            igstAmount: i.igstAmount,
                             amount: i.amount
                         }))
                     }
@@ -528,26 +567,44 @@ const createBill = async (req, res) => {
                 await tx.ledger.update({ where: { id: creditLedgerId }, data: { currentBalance: { increment: ledgerServiceAmount } } });
             }
 
-            // Handle Tax if applicable (Debit Tax Input, Credit Vendor)
+            // Handle Tax if applicable (Debit CGST/SGST/IGST Input or Tax, Credit Vendor)
             if (parseFloat(finalTax) > 0) {
-                const taxInputLedger = await resolveLedger('Tax', 'ASSETS') || await resolveLedger('Tax', 'LIABILITIES');
-                if (taxInputLedger) {
+                const totalCGST = billItems.reduce((s, i) => s + (i.cgstAmount || 0), 0);
+                const totalSGST = billItems.reduce((s, i) => s + (i.sgstAmount || 0), 0);
+                const totalIGST = billItems.reduce((s, i) => s + (i.igstAmount || 0), 0);
+
+                const fallbackTaxLedger = await resolveLedger('Tax', 'ASSETS') || await resolveLedger('Tax', 'LIABILITIES');
+                const cgstInputLedger = (totalCGST > 0) ? (await resolveLedger('CGST Input', 'ASSETS') || await resolveLedger('CGST Output', 'ASSETS') || fallbackTaxLedger) : null;
+                const sgstInputLedger = (totalSGST > 0) ? (await resolveLedger('SGST Input', 'ASSETS') || await resolveLedger('SGST Output', 'ASSETS') || fallbackTaxLedger) : null;
+                const igstInputLedger = (totalIGST > 0) ? (await resolveLedger('IGST Input', 'ASSETS') || await resolveLedger('IGST Output', 'ASSETS') || fallbackTaxLedger) : null;
+
+                const postPurchaseTaxEntry = async (targetLedger, taxAmt, taxName) => {
+                    const convertedTaxAmt = taxAmt * docExchangeRate;
+                    if (convertedTaxAmt <= 0 || !targetLedger) return;
                     await tx.transaction.create({
                         data: {
                             date: new Date(date),
-                            amount: ledgerTaxAmount,
-                            debitLedgerId: taxInputLedger.id,
+                            amount: convertedTaxAmt,
+                            debitLedgerId: targetLedger.id,
                             creditLedgerId: creditLedgerId,
                             voucherType: 'PURCHASE',
                             voucherNumber: billNumber,
                             companyId: parseInt(companyId),
                             journalEntryId: journalEntry.id,
                             purchaseBillId: bill.id,
-                            narration: 'Tax on Purchase'
+                            narration: `${taxName} on Purchase`
                         }
                     });
-                    await tx.ledger.update({ where: { id: taxInputLedger.id }, data: { currentBalance: { increment: ledgerTaxAmount } } });
-                    await tx.ledger.update({ where: { id: creditLedgerId }, data: { currentBalance: { increment: ledgerTaxAmount } } });
+                    await tx.ledger.update({ where: { id: targetLedger.id }, data: { currentBalance: { increment: convertedTaxAmt } } });
+                    await tx.ledger.update({ where: { id: creditLedgerId }, data: { currentBalance: { increment: convertedTaxAmt } } });
+                };
+
+                if (totalCGST > 0 || totalSGST > 0 || totalIGST > 0) {
+                    if (totalCGST > 0) await postPurchaseTaxEntry(cgstInputLedger, totalCGST, 'CGST Input');
+                    if (totalSGST > 0) await postPurchaseTaxEntry(sgstInputLedger, totalSGST, 'SGST Input');
+                    if (totalIGST > 0) await postPurchaseTaxEntry(igstInputLedger, totalIGST, 'IGST Input');
+                } else if (fallbackTaxLedger) {
+                    await postPurchaseTaxEntry(fallbackTaxLedger, finalTax, 'Tax');
                 }
             }
 
@@ -569,6 +626,63 @@ const createBill = async (req, res) => {
                 });
                 await tx.ledger.update({ where: { id: discountReceivedLedger.id }, data: { currentBalance: { increment: ledgerDiscountAmount } } });
                 await tx.ledger.update({ where: { id: creditLedgerId }, data: { currentBalance: { decrement: ledgerDiscountAmount } } });
+            }
+
+            // Handle Round Off Accounting Entry for Purchase Bill
+            if (Math.abs(roundOffVal) > 0.001) {
+                const roundOffLedger = await resolveLedger('Round Off', 'EXPENSES') || await resolveLedger('Round-off', 'EXPENSES') || await resolveLedger('Round Off', 'INCOME');
+                if (roundOffLedger) {
+                    const convertedRoundOff = Math.abs(roundOffVal) * docExchangeRate;
+                    if (roundOffVal > 0) {
+                        // Rounding Up (+): Vendor Payable increases (CR Vendor), Round-off Expense increases (DR Round Off)
+                        await tx.transaction.create({
+                            data: {
+                                date: new Date(date),
+                                voucherType: 'PURCHASE',
+                                voucherNumber: billNumber,
+                                debitLedgerId: roundOffLedger.id,
+                                creditLedgerId: creditLedgerId,
+                                amount: convertedRoundOff,
+                                narration: `Round-off on Purchase: ${billNumber}`,
+                                companyId: parseInt(companyId),
+                                journalEntryId: journalEntry.id,
+                                purchaseBillId: bill.id
+                            }
+                        });
+                        await tx.ledger.update({
+                            where: { id: roundOffLedger.id },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                        await tx.ledger.update({
+                            where: { id: creditLedgerId },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                    } else {
+                        // Rounding Down (-): Vendor Payable decreases (DR Vendor), Round-off Income increases (CR Round Off)
+                        await tx.transaction.create({
+                            data: {
+                                date: new Date(date),
+                                voucherType: 'PURCHASE',
+                                voucherNumber: billNumber,
+                                debitLedgerId: creditLedgerId,
+                                creditLedgerId: roundOffLedger.id,
+                                amount: convertedRoundOff,
+                                narration: `Round-off on Purchase: ${billNumber}`,
+                                companyId: parseInt(companyId),
+                                journalEntryId: journalEntry.id,
+                                purchaseBillId: bill.id
+                            }
+                        });
+                        await tx.ledger.update({
+                            where: { id: creditLedgerId },
+                            data: { currentBalance: { decrement: convertedRoundOff } }
+                        });
+                        await tx.ledger.update({
+                            where: { id: roundOffLedger.id },
+                            data: { currentBalance: { increment: convertedRoundOff } }
+                        });
+                    }
+                }
             }
 
             // Other Charges — double-entry per charge (DR selected ledger / CR Vendor)
@@ -984,6 +1098,54 @@ const deleteBill = async (req, res) => {
 
             // 6. Delete Bill Items and Bill
             await tx.purchasebillitem.deleteMany({ where: { purchaseBillId: bill.id } });
+
+            // Rollback status of linked Goods Received Note (GRN) and Purchase Order
+            const linkedGrnId = bill.grnId || bill.goodsReceiptNoteId;
+            if (linkedGrnId) {
+                const otherBills = await tx.purchasebill.findMany({
+                    where: {
+                        OR: [
+                            { grnId: linkedGrnId },
+                            { goodsReceiptNoteId: linkedGrnId }
+                        ],
+                        id: { not: bill.id }
+                    }
+                });
+                if (otherBills.length === 0) {
+                    try {
+                        await tx.goodsreceiptnote.update({
+                            where: { id: linkedGrnId },
+                            data: { status: 'RECEIVED' }
+                        });
+                    } catch (e) {
+                        console.warn('Could not update goodsreceiptnote status:', e.message);
+                    }
+                }
+            }
+
+            if (bill.purchaseOrderId) {
+                const otherBills = await tx.purchasebill.findMany({
+                    where: { purchaseOrderId: bill.purchaseOrderId, id: { not: bill.id } }
+                });
+                let remainingGRNs = [];
+                try {
+                    remainingGRNs = await tx.goodsreceiptnote.findMany({
+                        where: { purchaseOrderId: bill.purchaseOrderId, status: { notIn: ['CANCELLED', 'DRAFT'] } }
+                    });
+                } catch (e) {}
+
+                if (otherBills.length === 0 && remainingGRNs.length === 0) {
+                    try {
+                        await tx.purchaseorder.update({
+                            where: { id: bill.purchaseOrderId },
+                            data: { status: 'APPROVED' }
+                        });
+                    } catch (e) {
+                        console.warn('Could not update purchaseorder status:', e.message);
+                    }
+                }
+            }
+
             await tx.purchasebill.delete({ where: { id: bill.id } });
         }, {
             timeout: 90000
