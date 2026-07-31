@@ -17,7 +17,7 @@ const router = express.Router();
 router.post('/', upload.single('logo'), createPlanRequest);
 router.get('/', authenticateToken, authorizeRoles('SUPERADMIN'), getPlanRequests);
 router.get('/:id', authenticateToken, authorizeRoles('SUPERADMIN'), getPlanRequestById);
-router.put('/:id', authenticateToken, authorizeRoles('SUPERADMIN'), updatePlanRequest);
+router.put('/:id', authenticateToken, authorizeRoles('SUPERADMIN'), upload.single('logo'), updatePlanRequest);
 router.delete('/:id', authenticateToken, authorizeRoles('SUPERADMIN'), deletePlanRequest);
 
 // New semantic endpoints for Accept/Reject

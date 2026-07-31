@@ -1,19 +1,18 @@
+require('dotenv').config();
 const cloudinary = require('cloudinary').v2;
-const multerStorageCloudinary = require('multer-storage-cloudinary');
-const CloudinaryStorage = multerStorageCloudinary.CloudinaryStorage || multerStorageCloudinary;
 const multer = require('multer');
 
 const cloud_name = process.env.CLOUDINARY_CLOUD_NAME;
 const api_key = process.env.CLOUDINARY_API_KEY;
 const api_secret = process.env.CLOUDINARY_API_SECRET;
 
-const isConfigured = cloud_name && api_key && api_secret &&
+const isConfigured = Boolean(cloud_name && api_key && api_secret &&
     cloud_name !== 'your_cloud_name' &&
     api_key !== 'your_api_key' &&
-    api_secret !== 'your_api_secret';
+    api_secret !== 'your_api_secret');
 
 if (!isConfigured) {
-    console.warn('--- WARNING: Cloudinary is not configured correctly. Logo uploads will be disabled. ---');
+    console.warn('--- WARNING: Cloudinary is not configured correctly. Uploads will fallback to Base64. ---');
 }
 
 cloudinary.config({
@@ -22,23 +21,56 @@ cloudinary.config({
     api_secret: isConfigured ? api_secret : 'placeholder',
 });
 
-// Storage fallback if not configured
-const storage = isConfigured ? new CloudinaryStorage({
-    cloudinary: cloudinary,
-    // For older versions of multer-storage-cloudinary (v2.x)
-    folder: 'company_logos',
-    allowedFormats: ['jpg', 'png', 'jpeg'],
-    // For newer versions of multer-storage-cloudinary (v4.x)
-    params: {
-        folder: 'company_logos',
-        allowed_formats: ['jpg', 'png', 'jpeg'],
-        allowedFormats: ['jpg', 'png', 'jpeg'],
-    },
-}) : multer.memoryStorage(); // Fallback to memory if not configured
+// Memory storage keeps file buffers accessible for direct Cloudinary upload or Base64 fallback
+const storage = multer.memoryStorage();
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-module.exports = { cloudinary, upload, isCloudinaryConfigured: isConfigured };
+/**
+ * Helper function to upload a file (from req.file or req.files field) to Cloudinary,
+ * or fallback to base64 Data URI if Cloudinary is not configured or fails.
+ */
+const uploadToCloudinaryOrBase64 = async (file, folder = 'company_logos') => {
+    if (!file) return null;
+
+    if (typeof file === 'string') return file;
+    if (file.secure_url) return file.secure_url;
+    if (file.url) return file.url;
+
+    if (file.buffer) {
+        if (isConfigured) {
+            try {
+                const base64Data = file.buffer.toString('base64');
+                const dataUri = `data:${file.mimetype || 'image/png'};base64,${base64Data}`;
+                const result = await cloudinary.uploader.upload(dataUri, {
+                    folder: folder,
+                    resource_type: 'auto',
+                    use_filename: true,
+                    unique_filename: true
+                });
+                return result.secure_url || result.url;
+            } catch (err) {
+                console.error('Cloudinary upload error:', err);
+                return `data:${file.mimetype || 'image/png'};base64,${file.buffer.toString('base64')}`;
+            }
+        } else {
+            return `data:${file.mimetype || 'image/png'};base64,${file.buffer.toString('base64')}`;
+        }
+    }
+
+    if (file.path && typeof file.path === 'string' && file.path.startsWith('http')) {
+        return file.path;
+    }
+
+    return null;
+};
+
+module.exports = {
+    cloudinary,
+    upload,
+    isCloudinaryConfigured: isConfigured,
+    uploadToCloudinaryOrBase64
+};

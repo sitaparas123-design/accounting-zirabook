@@ -2864,3 +2864,22 @@
 [2026-07-29T13:51:33.812Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
 [2026-07-29T13:51:33.828Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
 [2026-07-29T13:51:33.841Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
+[2026-07-30T10:45:15.011Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
+[2026-07-30T10:53:11.400Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
+[2026-07-30T10:54:40.908Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-30T10:54:43.549Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-30T10:54:43.565Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-30T10:55:34.894Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T06:51:11.881Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T06:52:04.973Z] 📥 Received company update request for ID: 6
+[2026-07-31T06:52:04.975Z] Request body fields: name, email, phone, address, startDate, endDate, planId, planType, password
+[2026-07-31T06:52:04.975Z] invoiceLabels raw value: undefined
+[2026-07-31T06:52:04.987Z] 💾 Updating company in DB with updateData: {"name":"Ram","email":"ram@gmail.com","phone":"234567890","address":"Address","startDate":"2026-07-30T00:00:00.000Z","endDate":"2027-07-30T00:00:00.000Z","planId":1,"planType":"Yearly","showQrCode":false,"inventoryConfig":"{}"}
+[2026-07-31T06:52:05.162Z] ✅ Company updated in DB. company.invoiceLabels value: null
+[2026-07-31T06:59:44.089Z] 📥 Received company update request for ID: 6
+[2026-07-31T06:59:44.090Z] Request body fields: name, email, phone, address, startDate, endDate, planId, planType, password
+[2026-07-31T06:59:44.091Z] invoiceLabels raw value: undefined
+[2026-07-31T06:59:45.993Z] 💾 Updating company in DB with updateData: {"name":"Ram","email":"ram@gmail.com","phone":"234567890","address":"Address","startDate":"2026-07-30T00:00:00.000Z","endDate":"2027-07-30T00:00:00.000Z","planId":1,"planType":"Yearly","showQrCode":false,"inventoryConfig":"{}","logo":"https://res.cloudinary.com/dw48hcxi5/image/upload/v1785481185/company_logos/biyetierjwkvreduhevu.jpg"}
+[2026-07-31T06:59:46.033Z] ✅ Company updated in DB. company.invoiceLabels value: null
+[2026-07-31T07:02:38.982Z] 📡 getCompanyById ID: 7 | company.name: Sita | company.invoiceLabels: null
+[2026-07-31T07:04:31.317Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}

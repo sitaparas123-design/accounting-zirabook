@@ -1,6 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const chartOfAccountsService = require('../services/chartOfAccountsService');
+const { uploadToCloudinaryOrBase64 } = require('../utils/cloudinaryConfig');
 const prisma = new PrismaClient();
 
 const createPlanRequest = async (req, res) => {
@@ -13,12 +14,15 @@ const createPlanRequest = async (req, res) => {
             billingCycle,
             startDate,
             phone,
-            address
+            address,
+            logo
         } = req.body;
 
         let logoUrl = null;
         if (req.file) {
-            logoUrl = req.file.path;
+            logoUrl = await uploadToCloudinaryOrBase64(req.file, 'plan_requests');
+        } else if (logo) {
+            logoUrl = logo;
         }
 
         const planRequest = await prisma.planrequest.create({
@@ -91,6 +95,11 @@ const updatePlanRequest = async (req, res) => {
             logo
         } = req.body;
 
+        let logoUrl = logo;
+        if (req.file) {
+            logoUrl = await uploadToCloudinaryOrBase64(req.file, 'plan_requests');
+        }
+
         const planRequest = await prisma.planrequest.update({
             where: { id: parseInt(req.params.id) },
             data: {
@@ -98,7 +107,7 @@ const updatePlanRequest = async (req, res) => {
                 email,
                 phone,
                 address,
-                logo,
+                logo: logoUrl !== undefined ? logoUrl : undefined,
                 planId: planId ? parseInt(planId) : null,
                 planName,
                 billingCycle,

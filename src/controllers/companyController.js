@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 const chartOfAccountsService = require('../services/chartOfAccountsService');
 const numberingService = require('../services/numberingService');
-const { isCloudinaryConfigured } = require('../utils/cloudinaryConfig');
+const { isCloudinaryConfigured, uploadToCloudinaryOrBase64 } = require('../utils/cloudinaryConfig');
 
 const createCompany = async (req, res) => {
     try {
@@ -11,11 +11,7 @@ const createCompany = async (req, res) => {
 
         let logoUrl = null;
         if (req.file) {
-            if (isCloudinaryConfigured) {
-                logoUrl = req.file.path; // Cloudinary URL
-            } else {
-                console.warn('File received but Cloudinary not configured. Logo not saved.');
-            }
+            logoUrl = await uploadToCloudinaryOrBase64(req.file, 'company_logos');
         }
 
         // Check if company or user already exists
@@ -299,20 +295,10 @@ const updateCompany = async (req, res) => {
 
         if (req.files) {
             if (req.files.logo && req.files.logo[0]) {
-                const logoFile = req.files.logo[0];
-                if (isCloudinaryConfigured) {
-                    updateData.logo = logoFile.path;
-                } else if (logoFile.buffer) {
-                    updateData.logo = `data:${logoFile.mimetype};base64,${logoFile.buffer.toString('base64')}`;
-                }
+                updateData.logo = await uploadToCloudinaryOrBase64(req.files.logo[0], 'company_logos');
             }
             if (req.files.invoiceLogo && req.files.invoiceLogo[0]) {
-                const invoiceLogoFile = req.files.invoiceLogo[0];
-                if (isCloudinaryConfigured) {
-                    updateData.invoiceLogo = invoiceLogoFile.path;
-                } else if (invoiceLogoFile.buffer) {
-                    updateData.invoiceLogo = `data:${invoiceLogoFile.mimetype};base64,${invoiceLogoFile.buffer.toString('base64')}`;
-                }
+                updateData.invoiceLogo = await uploadToCloudinaryOrBase64(req.files.invoiceLogo[0], 'company_logos');
             }
         }
 

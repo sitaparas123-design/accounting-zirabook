@@ -1,7 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
-const { isCloudinaryConfigured } = require('../utils/cloudinaryConfig');
+const { isCloudinaryConfigured, uploadToCloudinaryOrBase64 } = require('../utils/cloudinaryConfig');
 
 const getProfile = async (req, res) => {
     try {
@@ -30,17 +30,7 @@ const updateProfile = async (req, res) => {
         const data = { name, email };
 
         if (req.file) {
-            console.log('File received in updateProfile:', req.file);
-            console.log('Cloudinary Configured:', isCloudinaryConfigured);
-
-            if (isCloudinaryConfigured) {
-                data.avatar = req.file.path;
-                console.log('Setting data.avatar to:', data.avatar);
-            } else {
-                console.warn('Cloudinary not configured, skipping avatar update.');
-            }
-        } else {
-            console.log('No file received in updateProfile request body.');
+            data.avatar = await uploadToCloudinaryOrBase64(req.file, 'avatars');
         }
 
         const updatedUser = await prisma.user.update({
