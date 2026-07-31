@@ -309,7 +309,7 @@ const getSalesBySalesmanReport = async (req, res) => {
         const companyCurrency = await getCompanyCurrency(companyId);
         const grouped = {};
         for (const inv of allInvoices) {
-            const salesman = 'Administrator';
+            const salesman = '';
             const rate = await getConversionRate(inv.currency || 'USD', companyCurrency);
             if (!grouped[salesman]) {
                 grouped[salesman] = { salesman, totalInvoices: 0, totalSales: 0, totalPaid: 0, totalPending: 0 };

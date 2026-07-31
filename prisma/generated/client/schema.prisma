@@ -539,16 +539,17 @@ model invoiceitem {
 }
 
 model journalentry {
-  id            Int           @id @default(autoincrement())
-  date          DateTime      @default(now())
-  voucherNumber String
-  narration     String?       @db.Text
-  companyId     Int
-  source        String?       @default("system")
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @default(now()) @updatedAt
-  company       company       @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "JournalEntry_companyId_fkey")
-  transaction   transaction[]
+  id              Int           @id @default(autoincrement())
+  date            DateTime      @default(now())
+  voucherNumber   String
+  manualVoucherNo String?
+  narration       String?       @db.Text
+  companyId       Int
+  source          String?       @default("system")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @default(now()) @updatedAt
+  company         company       @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "JournalEntry_companyId_fkey")
+  transaction     transaction[]
 
   @@unique([companyId, voucherNumber], map: "JournalEntry_companyId_voucherNumber_key")
 }
@@ -1729,6 +1730,7 @@ enum salesreturn_status {
 model voucher {
   id               Int           @id @default(autoincrement())
   voucherNumber    String
+  manualVoucherNo  String?
   voucherType      voucher_type
   date             DateTime      @default(now())
   companyId        Int

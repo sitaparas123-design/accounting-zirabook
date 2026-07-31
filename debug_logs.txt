@@ -2883,3 +2883,8 @@
 [2026-07-31T06:59:46.033Z] ✅ Company updated in DB. company.invoiceLabels value: null
 [2026-07-31T07:02:38.982Z] 📡 getCompanyById ID: 7 | company.name: Sita | company.invoiceLabels: null
 [2026-07-31T07:04:31.317Z] 📡 getCompanyById ID: 3 | company.name: Start Company Pvt. Ltd. | company.invoiceLabels: {"billTo":"Bill To:","shipTo":"Ship To:","subTotal":"Sub Total","tax":"Tax","total":"Total","number":"Number:","issue":"Issue:","dueDate":"Due Date:","showHeader":true,"showFooter":true,"showWarehouse":true,"showQty":true,"showUom":true,"showRate":true,"showTax":true,"showDiscount":true}
+[2026-07-31T10:33:26.708Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T10:33:39.742Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T10:35:29.057Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T10:41:08.472Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null
+[2026-07-31T10:41:53.770Z] 📡 getCompanyById ID: 6 | company.name: Ram | company.invoiceLabels: null

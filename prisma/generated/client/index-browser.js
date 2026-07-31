@@ -474,6 +474,7 @@ exports.Prisma.JournalentryScalarFieldEnum = {
   id: 'id',
   date: 'date',
   voucherNumber: 'voucherNumber',
+  manualVoucherNo: 'manualVoucherNo',
   narration: 'narration',
   companyId: 'companyId',
   source: 'source',
@@ -1143,6 +1144,7 @@ exports.Prisma.WarehouseScalarFieldEnum = {
 exports.Prisma.VoucherScalarFieldEnum = {
   id: 'id',
   voucherNumber: 'voucherNumber',
+  manualVoucherNo: 'manualVoucherNo',
   voucherType: 'voucherType',
   date: 'date',
   companyId: 'companyId',
