@@ -314,10 +314,10 @@ const getVendorLedger = async (vendorId, companyId) => {
             }))
         ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        // Calculate running balance chronologically
+        // Calculate running balance chronologically for vendor (liability account: Credit +, Debit -)
         let balance = vendor.ledger.openingBalance || 0;
         const transactionsWithBalance = allTransactions.map(t => {
-            balance = balance + t.debit - t.credit;
+            balance = balance + t.credit - t.debit;
             return {
                 ...t,
                 balance: balance

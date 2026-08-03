@@ -148,6 +148,17 @@ const createBill = async (req, res) => {
         const vendStateStr = (req.body.billingState || vendorRec?.billingState || '').toLowerCase().trim();
         const isInterState = Boolean(compStateStr && vendStateStr && compStateStr !== vendStateStr);
 
+        let defaultWhId = req.body.warehouseId ? parseInt(req.body.warehouseId) : null;
+        if (!defaultWhId) {
+            const compSettings = await prisma.companysettings.findFirst({ where: { companyId: parseInt(companyId) } });
+            const cfg = compSettings?.inventoryConfig || {};
+            if (cfg.defaultPurchaseWarehouseId) defaultWhId = parseInt(cfg.defaultPurchaseWarehouseId);
+        }
+        if (!defaultWhId) {
+            const firstWh = await prisma.warehouse.findFirst({ where: { companyId: parseInt(companyId) } });
+            if (firstWh) defaultWhId = firstWh.id;
+        }
+
         let calculatedSubtotal = 0;
         let calculatedItemDiscount = 0;
         let calculatedTaxSum = 0;
@@ -183,7 +194,7 @@ const createBill = async (req, res) => {
 
             return {
                 productId: item.productId ? parseInt(item.productId) : null,
-                warehouseId: item.warehouseId ? parseInt(item.warehouseId) : null,
+                warehouseId: item.warehouseId ? parseInt(item.warehouseId) : defaultWhId,
                 uomId: item.uomId ? parseInt(item.uomId) : null,
                 description: item.description,
                 quantity: qty,
@@ -489,7 +500,8 @@ const createBill = async (req, res) => {
                     const valuationMethod = invConfig.valuationMethod || 'WAC';
 
                     for (const item of billItems) {
-                        if (item.productId && item.warehouseId) {
+                        const targetWh = item.warehouseId || defaultWhId;
+                        if (item.productId && targetWh) {
                             // Fetch Product with Base UoM
                             const prod = await tx.product.findUnique({
                                 where: { id: item.productId },
@@ -512,9 +524,9 @@ const createBill = async (req, res) => {
                             const baseNetRate = convertTransRateToBaseRate(netRate, transUom, baseUom);
 
                             await tx.stock.upsert({
-                                where: { warehouseId_productId: { warehouseId: item.warehouseId, productId: item.productId } },
+                                where: { warehouseId_productId: { warehouseId: targetWh, productId: item.productId } },
                                 update: { quantity: { increment: baseQty } },
-                                create: { warehouseId: item.warehouseId, productId: item.productId, quantity: baseQty }
+                                create: { warehouseId: targetWh, productId: item.productId, quantity: baseQty }
                             });
 
                             await tx.inventorytransaction.create({
@@ -522,7 +534,7 @@ const createBill = async (req, res) => {
                                     date: new Date(date),
                                     type: 'PURCHASE',
                                     productId: item.productId,
-                                    toWarehouseId: item.warehouseId,
+                                    toWarehouseId: targetWh,
                                     quantity: baseQty,
                                     reason: `Direct Purchase Bill: ${billNumber}`,
                                     companyId: parseInt(companyId),
@@ -1320,19 +1332,13 @@ const updateBill = async (req, res) => {
                             }
                         });
 
-                        // Log inventory transaction for return/reversal
-                        await tx.inventorytransaction.create({
-                            data: {
-                                date: new Date(),
-                                type: 'RETURN',
-                                productId: item.productId,
-                                fromWarehouseId: item.warehouseId,
-                                quantity: baseQty,
-                                reason: `Purchase Bill Edited (Stock Reversal): ${oldBill.billNumber}`,
-                                companyId: parseInt(companyId),
-                                userId: req.user?.userId || null
-                            }
-                        });
+                // Clean up old inventory transactions for this edited purchase bill
+                await tx.inventorytransaction.deleteMany({
+                    where: {
+                        companyId: parseInt(companyId),
+                        reason: { contains: oldBill.billNumber }
+                    }
+                });
                     }
                 }
 

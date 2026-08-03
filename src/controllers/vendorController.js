@@ -649,9 +649,9 @@ const getVendorStatement = async (req, res) => {
         const groupedMap = new Map();
         transactions.forEach(tx => {
             let key = `tx_${tx.id}`;
-            if (tx.purchaseBillId) key = `pbill_${tx.purchaseBillId}`;
-            else if (tx.paymentId) key = `pay_${tx.paymentId}`;
+            if (tx.paymentId) key = `pay_${tx.paymentId}`;
             else if (tx.purchaseReturnId) key = `preturn_${tx.purchaseReturnId}`;
+            else if (tx.purchaseBillId) key = `pbill_${tx.purchaseBillId}`;
             else if (tx.voucherNumber) key = `v_${tx.voucherType}_${tx.voucherNumber}_${new Date(tx.date).toISOString().split('T')[0]}`;
 
             if (!groupedMap.has(key)) {

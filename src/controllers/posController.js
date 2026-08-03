@@ -909,17 +909,11 @@ const updatePOSInvoice = async (req, res) => {
                         data: { quantity: { increment: baseQty } }
                     });
 
-                    // Log return transaction
-                    await tx.inventorytransaction.create({
-                        data: {
-                            date: new Date(),
-                            type: 'RETURN',
-                            productId: item.productId,
-                            toWarehouseId: item.warehouseId,
-                            quantity: baseQty,
-                            reason: `Void Items on Update POS: ${existingInvoice.invoiceNumber}`,
+                    // Clean up old inventory transactions for this edited POS invoice
+                    await tx.inventorytransaction.deleteMany({
+                        where: {
                             companyId: parseInt(currentCompanyId),
-                            userId: req.user?.userId || null
+                            reason: { contains: existingInvoice.invoiceNumber }
                         }
                     });
 

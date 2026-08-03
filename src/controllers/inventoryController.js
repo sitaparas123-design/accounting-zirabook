@@ -186,7 +186,12 @@ const getInventoryHistory = async (req, res) => {
             orderBy: { date: 'desc' }
         });
 
-        res.status(200).json({ success: true, data: transactions });
+        const filteredTransactions = transactions.filter(t => {
+            const rLower = (t.reason || '').toLowerCase();
+            return !rLower.includes('stock reversal') && !rLower.includes('edited (stock reversal)') && !rLower.includes('void items on update pos');
+        });
+
+        res.status(200).json({ success: true, data: filteredTransactions });
     } catch (error) {
         console.error('History Error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch history' });

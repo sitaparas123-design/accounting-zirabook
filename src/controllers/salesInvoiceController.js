@@ -254,6 +254,17 @@ const createInvoice = async (req, res) => {
         const custStateStr = (req.body.billingState || customer?.billingState || '').toLowerCase().trim();
         const isInterState = Boolean(compStateStr && custStateStr && compStateStr !== custStateStr);
 
+        let defaultWhId = req.body.warehouseId ? parseInt(req.body.warehouseId) : null;
+        if (!defaultWhId) {
+            const compSettings = await prisma.companysettings.findFirst({ where: { companyId: parseInt(companyId) } });
+            const cfg = compSettings?.inventoryConfig || {};
+            if (cfg.defaultSalesWarehouseId) defaultWhId = parseInt(cfg.defaultSalesWarehouseId);
+        }
+        if (!defaultWhId) {
+            const firstWh = await prisma.warehouse.findFirst({ where: { companyId: parseInt(companyId) } });
+            if (firstWh) defaultWhId = firstWh.id;
+        }
+
         let subtotal = 0;
         let totalDiscount = 0;
         let lineTaxSum = 0;
@@ -302,7 +313,7 @@ const createInvoice = async (req, res) => {
                 cgstAmount,
                 sgstAmount,
                 igstAmount,
-                warehouseId: item.warehouseId ? parseInt(item.warehouseId) : null,
+                warehouseId: item.warehouseId ? parseInt(item.warehouseId) : defaultWhId,
                 uomId: item.uomId ? parseInt(item.uomId) : null
             };
         });
@@ -680,7 +691,8 @@ const createInvoice = async (req, res) => {
             } else {
                 // Direct Invoice
                 for (const item of invoiceItems) {
-                    if (item.productId && item.warehouseId) {
+                    const targetWh = item.warehouseId || defaultWhId;
+                    if (item.productId && targetWh) {
                         const prod = await tx.product.findUnique({
                             where: { id: item.productId },
                             include: { uom: true }
@@ -689,9 +701,9 @@ const createInvoice = async (req, res) => {
                         const baseQty = convertToBaseQuantity(item.quantity, transUom, prod?.uom);
 
                         await tx.stock.upsert({
-                            where: { warehouseId_productId: { warehouseId: item.warehouseId, productId: item.productId } },
+                            where: { warehouseId_productId: { warehouseId: targetWh, productId: item.productId } },
                             create: {
-                                warehouseId: item.warehouseId,
+                                warehouseId: targetWh,
                                 productId: item.productId,
                                 quantity: -baseQty,
                                 initialQty: 0,
@@ -706,7 +718,7 @@ const createInvoice = async (req, res) => {
                             data: {
                                 type: 'SALE',
                                 productId: item.productId,
-                                fromWarehouseId: item.warehouseId,
+                                fromWarehouseId: targetWh,
                                 companyId: parseInt(companyId),
                                 quantity: baseQty,
                                 userId: req.user?.userId || null,

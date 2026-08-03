@@ -687,6 +687,14 @@ const getProductById = async (req, res) => {
 
         if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
 
+        // Exclude legacy internal edit stock reversal log entries from transaction history
+        if (product.inventorytransaction && Array.isArray(product.inventorytransaction)) {
+            product.inventorytransaction = product.inventorytransaction.filter(t => {
+                const rLower = (t.reason || '').toLowerCase();
+                return !rLower.includes('stock reversal') && !rLower.includes('edited (stock reversal)') && !rLower.includes('void items on update pos');
+            });
+        }
+
         const companyCurrency = await getCompanyCurrency(companyId);
         const histCurr = await getCompanyHistoricalCurrency(companyId);
         const rate = await getConversionRate(histCurr, companyCurrency);

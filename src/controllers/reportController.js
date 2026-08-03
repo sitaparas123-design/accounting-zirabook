@@ -852,8 +852,11 @@ const getInventorySummary = async (req, res) => {
         const end = endDate ? new Date(endDate) : null;
 
         transactions.forEach(txn => {
-            const txnDate = new Date(txn.date);
             const rLower = (txn.reason || '').toLowerCase();
+            if (rLower.includes('stock reversal') || rLower.includes('edited (stock reversal)') || rLower.includes('void items on update pos')) {
+                return;
+            }
+            const txnDate = new Date(txn.date);
             const isOpeningStockTxn = rLower.includes('opening') || rLower.includes('initial');
 
             // Handle OUT from warehouse
@@ -1096,9 +1099,9 @@ const getBalanceSheet = async (req, res) => {
         const currentInventoryValue = (await calculateInventoryValue(companyId)) * rate;
 
         ledgers.forEach(ledger => {
-            if (ledger.name.toLowerCase().includes('opening balance equity')) {
-                return;
-            }
+            //  if (ledger.name.toLowerCase().includes('opening balance equity')) {
+            //     return;
+            // }
             const groupType = ledger.accountgroup?.type;
             const opening = (ledger.openingBalance || 0) * rate;
 
