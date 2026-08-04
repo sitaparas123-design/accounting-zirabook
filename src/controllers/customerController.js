@@ -358,7 +358,7 @@ const updateCustomer = async (req, res) => {
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
             const rawBalanceInput = parseFloat(customerData.accountBalance) || 0;
-            const targetOpeningBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+            const targetBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
 
             let transactionsNet = 0;
 
@@ -383,8 +383,8 @@ const updateCustomer = async (req, res) => {
                 }
             }
 
-            const newOpeningBalance = targetOpeningBalance;
-            const newCurrentBalance = targetOpeningBalance + transactionsNet;
+            const newCurrentBalance = targetBalance;
+            const newOpeningBalance = targetBalance - transactionsNet;
 
             // Update Customer
             const customer = await tx.customer.update({

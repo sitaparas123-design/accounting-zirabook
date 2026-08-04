@@ -353,7 +353,7 @@ const updateVendor = async (req, res) => {
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
             const rawBalanceInput = parseFloat(vendorData.accountBalance) || 0;
-            const targetOpeningBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+            const targetBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
 
             let transactionsNet = 0;
 
@@ -378,8 +378,8 @@ const updateVendor = async (req, res) => {
                 }
             }
 
-            const newOpeningBalance = targetOpeningBalance;
-            const newCurrentBalance = targetOpeningBalance + transactionsNet;
+            const newCurrentBalance = targetBalance;
+            const newOpeningBalance = targetBalance - transactionsNet;
 
             // Update Vendor
             const vendor = await tx.vendor.update({
