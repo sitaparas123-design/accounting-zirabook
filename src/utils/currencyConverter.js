@@ -256,10 +256,10 @@ const getCompanyHistoricalCurrency = async (companyId) => {
             where: { id: parseInt(companyId) },
             select: { originalCurrency: true, currency: true }
         });
-        return company?.originalCurrency || company?.currency || 'KWD';
+        return company?.originalCurrency || company?.currency || 'USD';
     } catch (e) {
         console.error('Error fetching company historical currency:', e.message);
-        return 'KWD';
+        return 'USD';
     }
 };
 

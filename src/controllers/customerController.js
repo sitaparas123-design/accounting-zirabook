@@ -83,7 +83,7 @@ const createCustomer = async (req, res) => {
                     accountType: customerData.accountType,
                     balanceType: customerData.balanceType || 'Debit',
                     accountName: ledgerName,
-                    accountBalance: initialBalance,
+                    accountBalance: rawBalanceInput,
                     creationDate: customerData.creationDate ? new Date(customerData.creationDate) : new Date(),
                     bankAccountNumber: customerData.bankAccountNumber,
                     bankIFSC: customerData.bankIFSC,
@@ -358,7 +358,7 @@ const updateCustomer = async (req, res) => {
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
             const rawBalanceInput = parseFloat(customerData.accountBalance) || 0;
-            const targetCurrentBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+            const targetOpeningBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
 
             let transactionsNet = 0;
 
@@ -383,8 +383,8 @@ const updateCustomer = async (req, res) => {
                 }
             }
 
-            const newOpeningBalance = targetCurrentBalance - transactionsNet;
-            const newCurrentBalance = targetCurrentBalance;
+            const newOpeningBalance = targetOpeningBalance;
+            const newCurrentBalance = targetOpeningBalance + transactionsNet;
 
             // Update Customer
             const customer = await tx.customer.update({
@@ -398,7 +398,7 @@ const updateCustomer = async (req, res) => {
                     anyFile: customerData.anyFile,
                     accountType: customerData.accountType,
                     balanceType: customerData.balanceType,
-                    accountBalance: newCurrentBalance,
+                    accountBalance: rawBalanceInput,
                     bankAccountNumber: customerData.bankAccountNumber,
                     bankIFSC: customerData.bankIFSC,
                     bankNameBranch: customerData.bankNameBranch,

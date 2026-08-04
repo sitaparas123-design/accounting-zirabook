@@ -83,7 +83,7 @@ const createVendor = async (req, res) => {
                     accountType: vendorData.accountType,
                     balanceType: vendorData.balanceType || 'Credit',
                     accountName: ledgerName,
-                    accountBalance: initialBalance,
+                    accountBalance: rawBalanceInput,
                     creationDate: vendorData.creationDate ? new Date(vendorData.creationDate) : new Date(),
                     bankAccountNumber: vendorData.bankAccountNumber,
                     bankIFSC: vendorData.bankIFSC,
@@ -353,7 +353,7 @@ const updateVendor = async (req, res) => {
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
             const rawBalanceInput = parseFloat(vendorData.accountBalance) || 0;
-            const targetCurrentBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+            const targetOpeningBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
 
             let transactionsNet = 0;
 
@@ -378,8 +378,8 @@ const updateVendor = async (req, res) => {
                 }
             }
 
-            const newOpeningBalance = targetCurrentBalance - transactionsNet;
-            const newCurrentBalance = targetCurrentBalance;
+            const newOpeningBalance = targetOpeningBalance;
+            const newCurrentBalance = targetOpeningBalance + transactionsNet;
 
             // Update Vendor
             const vendor = await tx.vendor.update({
@@ -393,7 +393,7 @@ const updateVendor = async (req, res) => {
                     anyFile: vendorData.anyFile,
                     accountType: vendorData.accountType,
                     balanceType: vendorData.balanceType,
-                    accountBalance: newCurrentBalance,
+                    accountBalance: rawBalanceInput,
                     bankAccountNumber: vendorData.bankAccountNumber,
                     bankIFSC: vendorData.bankIFSC,
                     bankNameBranch: vendorData.bankNameBranch,
