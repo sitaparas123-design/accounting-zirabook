@@ -248,7 +248,7 @@ const createInvoice = async (req, res) => {
 
         const companyRec = await prisma.company.findUnique({
             where: { id: parseInt(companyId) },
-            select: { state: true }
+            select: { state: true, inventoryConfig: true }
         });
         const compStateStr = (companyRec?.state || '').toLowerCase().trim();
         const custStateStr = (req.body.billingState || customer?.billingState || '').toLowerCase().trim();
@@ -256,8 +256,10 @@ const createInvoice = async (req, res) => {
 
         let defaultWhId = req.body.warehouseId ? parseInt(req.body.warehouseId) : null;
         if (!defaultWhId) {
-            const compSettings = await prisma.companysettings.findFirst({ where: { companyId: parseInt(companyId) } });
-            const cfg = compSettings?.inventoryConfig || {};
+            let cfg = {};
+            try {
+                cfg = typeof companyRec?.inventoryConfig === 'string' ? JSON.parse(companyRec.inventoryConfig) : (companyRec?.inventoryConfig || {});
+            } catch (e) { }
             if (cfg.defaultSalesWarehouseId) defaultWhId = parseInt(cfg.defaultSalesWarehouseId);
         }
         if (!defaultWhId) {
