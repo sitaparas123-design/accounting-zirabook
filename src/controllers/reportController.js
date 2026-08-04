@@ -1229,12 +1229,14 @@ const getBalanceSheet = async (req, res) => {
             }
         }
 
+        // Calculate total sums for Assets, Liabilities, and Equity
+        reportData.assets.total = reportData.assets.current.reduce((sum, item) => sum + item.value, 0) + reportData.assets.fixed.reduce((sum, item) => sum + item.value, 0);
+        reportData.liabilities.total = reportData.liabilities.current.reduce((sum, item) => sum + item.value, 0) + reportData.liabilities.longTerm.reduce((sum, item) => sum + item.value, 0);
+        reportData.equity.total = reportData.equity.items.reduce((sum, item) => sum + item.value, 0);
+
         // Calculate imbalance / posting discrepancy
         // Assets = Liabilities + Total Equity
-        const totalAssets = reportData.assets.total;
-        const totalLiabilities = reportData.liabilities.total;
-        const totalEquity = reportData.equity.total;
-        const discrepancy = totalAssets - (totalLiabilities + totalEquity);
+        const discrepancy = reportData.assets.total - (reportData.liabilities.total + reportData.equity.total);
 
         reportData.discrepancy = Math.abs(discrepancy) > 0.01 ? Math.round(discrepancy * 100) / 100 : 0;
 

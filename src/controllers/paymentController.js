@@ -132,7 +132,7 @@ const createPayment = async (req, res) => {
                         }
                         return Object.keys(cf).length > 0 ? JSON.stringify(cf) : null;
                     })(),
-                    paymentNumber: paymentNumber || `PAY-${Date.now()}`,
+                    paymentNumber: paymentNumber || (await numberingService.getNextNumber(companyId, 'payment')).formattedNumber,
                     date: date ? new Date(date) : new Date(),
                     vendorId: parseInt(vendorId),
                     purchaseBillId: purchaseBillId ? parseInt(purchaseBillId) : (normalizedAllocations[0]?.purchaseBillId || null),
@@ -1058,6 +1058,24 @@ const getVendorAdvance = async (req, res) => {
     }
 };
 
+const getNextNumber = async (req, res) => {
+    try {
+        const companyId = parseInt(req.query.companyId || req.user?.companyId);
+        if (!companyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required' });
+        }
+        const result = await numberingService.getNextNumber(companyId, 'payment');
+        return res.json({
+            success: true,
+            nextNumber: result.formattedNumber,
+            details: result
+        });
+    } catch (error) {
+        console.error('Error fetching next payment number:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     createPayment,
     getPayments,
@@ -1065,5 +1083,6 @@ module.exports = {
     updatePayment,
     deletePayment,
     deletePaymentHelper,
-    getVendorAdvance
+    getVendorAdvance,
+    getNextNumber
 };

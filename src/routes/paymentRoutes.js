@@ -5,6 +5,7 @@ const { authenticateToken } = require('../middlewares/authMiddleware');
 
 router.post('/', authenticateToken, paymentController.createPayment);
 router.get('/', authenticateToken, paymentController.getPayments);
+router.get('/next-number', authenticateToken, paymentController.getNextNumber);
 router.get('/vendor-advance/:vendorId', authenticateToken, paymentController.getVendorAdvance);
 router.get('/:id', authenticateToken, paymentController.getPaymentById);
 router.put('/:id', authenticateToken, paymentController.updatePayment);

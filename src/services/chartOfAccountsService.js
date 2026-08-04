@@ -182,12 +182,11 @@ const calculateDynamicLedgerBalances = async (companyId, inventoryValue) => {
             let dynamicBalance;
             if (isInventory) {
                 dynamicBalance = inventoryValue; // already in base currency (INR) — no conversion needed
-            } else if (isOBE || isRetainedEarnings) {
+            } else if (isRetainedEarnings) {
                 dynamicBalance = 0; // Will be set after totals
             } else if (['ASSETS', 'EXPENSES'].includes(groupType)) {
                 dynamicBalance = opening + txnDebit - txnCredit;
             } else {
-                //  dynamicBalance = txnCredit - txnDebit;
                 dynamicBalance = opening + txnCredit - txnDebit;
             }
 
@@ -216,17 +215,9 @@ const calculateDynamicLedgerBalances = async (companyId, inventoryValue) => {
         const reTxnCredit = reLedger ? (creditMap.get(reLedger.id) || 0) : 0;
         const dynamicRetainedEarnings = reTxnCredit - reTxnDebit + netProfit;
 
-        // Add dynamic Retained Earnings to totalOtherEquity for correct OBE calculation
-        totalOtherEquity += dynamicRetainedEarnings;
-
-        // Opening Balance Equity = exact offset to balance the trial balance
-        const dynamicOBE = totalAssets - totalLiabilities - totalOtherEquity;
-
-        // Apply OBE and Retained Earnings values back into the map
+        // Apply Retained Earnings values back into the map
         for (const [id, entry] of balanceMap) {
-            if (entry.isOBE) {
-                entry.dynamicBalance = dynamicOBE;
-            } else if (entry.isRetainedEarnings) {
+            if (entry.isRetainedEarnings) {
                 entry.dynamicBalance = dynamicRetainedEarnings;
             }
         }
@@ -847,7 +838,7 @@ const getLedgerTransactions = async (ledgerId, companyId) => {
         const balanceMap = await calculateDynamicLedgerBalances(companyId, inventoryValue);
         const entry = balanceMap.get(parseInt(ledgerId));
 
-        if (entry && (entry.isOBE || entry.isRetainedEarnings || entry.isInventory)) {
+        if (entry && (entry.isRetainedEarnings || entry.isInventory)) {
             const opening = entry.ledger.openingBalance || 0;
             let actualTxnDebit = 0;
             let actualTxnCredit = 0;
@@ -864,9 +855,8 @@ const getLedgerTransactions = async (ledgerId, companyId) => {
             const diff = entry.dynamicBalance - actualBalance;
 
             if (Math.abs(diff) > 0.01) {
-                const isOBE = entry.isOBE;
                 const isInventory = entry.isInventory;
-                const adjustmentLedger = { name: isOBE ? 'Trial Balance Adjustment' : (isInventory ? 'Inventory Valuation Adjustment' : 'Income / Expense Summary') };
+                const adjustmentLedger = { name: isInventory ? 'Inventory Valuation Adjustment' : 'Income / Expense Summary' };
 
                 let debitId, creditId;
                 if (isDebitNormal) {
@@ -878,18 +868,16 @@ const getLedgerTransactions = async (ledgerId, companyId) => {
                 }
 
                 normalized.push({
-                    id: isOBE ? 999999 : (isInventory ? 999997 : 999998),
+                    id: isInventory ? 999997 : 999998,
                     date: new Date(),
                     amount: Math.abs(diff),
                     debitLedgerId: debitId,
                     creditLedgerId: creditId,
                     voucherType: 'JOURNAL',
-                    voucherNumber: isOBE ? 'BAL-ADJ' : (isInventory ? 'BAL-ADJ' : 'NET-PROFIT'),
-                    narration: isOBE
-                        ? 'Opening Balance Equity - Balancing Adjustment'
-                        : (isInventory
-                            ? 'Inventory Valuation - Balancing Adjustment'
-                            : 'Retained Earnings - Net Profit/Loss for Period'),
+                    voucherNumber: isInventory ? 'BAL-ADJ' : 'NET-PROFIT',
+                    narration: isInventory
+                        ? 'Inventory Valuation - Balancing Adjustment'
+                        : 'Retained Earnings - Net Profit/Loss for Period',
                     companyId: companyId,
                     debitLedger: debitId === parseInt(ledgerId) ? entry.ledger : adjustmentLedger,
                     creditLedger: creditId === parseInt(ledgerId) ? entry.ledger : adjustmentLedger

@@ -68,6 +68,8 @@ const createVendor = async (req, res) => {
         // Create Vendor and Ledger in a transaction
         const result = await prisma.$transaction(async (tx) => {
             const ledgerName = vendorData.name;
+            const rawBalanceInput = parseFloat(vendorData.accountBalance) || 0;
+            const initialBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
             
             // Create Vendor with nested Ledger
             const vendor = await tx.vendor.create({
@@ -81,7 +83,7 @@ const createVendor = async (req, res) => {
                     accountType: vendorData.accountType,
                     balanceType: vendorData.balanceType || 'Credit',
                     accountName: ledgerName,
-                    accountBalance: parseFloat(vendorData.accountBalance) || 0,
+                    accountBalance: initialBalance,
                     creationDate: vendorData.creationDate ? new Date(vendorData.creationDate) : new Date(),
                     bankAccountNumber: vendorData.bankAccountNumber,
                     bankIFSC: vendorData.bankIFSC,
@@ -120,8 +122,8 @@ const createVendor = async (req, res) => {
                             groupId: accountsPayableSubGroup.groupId,
                             subGroupId: accountsPayableSubGroup.id,
                             companyId: companyId,
-                            openingBalance: parseFloat(vendorData.accountBalance) || 0,
-                            currentBalance: parseFloat(vendorData.accountBalance) || 0,
+                            openingBalance: initialBalance,
+                            currentBalance: initialBalance,
                             isControlAccount: false,
                             isEnabled: true,
                             description: `Vendor Ledger for ${ledgerName}`
@@ -350,8 +352,10 @@ const updateVendor = async (req, res) => {
 
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
-            const newOpeningBalance = parseFloat(vendorData.accountBalance) || 0;
-            let newCurrentBalance = newOpeningBalance;
+            const rawBalanceInput = parseFloat(vendorData.accountBalance) || 0;
+            const targetCurrentBalance = vendorData.balanceType === 'Debit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+
+            let transactionsNet = 0;
 
             if (existingVendor.ledgerId) {
                 // Fetch all transactions involving vendor's ledger
@@ -367,12 +371,15 @@ const updateVendor = async (req, res) => {
 
                 for (const txn of transactions) {
                     if (txn.creditLedgerId === existingVendor.ledgerId) {
-                        newCurrentBalance += txn.amount;
+                        transactionsNet += txn.amount;
                     } else {
-                        newCurrentBalance -= txn.amount;
+                        transactionsNet -= txn.amount;
                     }
                 }
             }
+
+            const newOpeningBalance = targetCurrentBalance - transactionsNet;
+            const newCurrentBalance = targetCurrentBalance;
 
             // Update Vendor
             const vendor = await tx.vendor.update({

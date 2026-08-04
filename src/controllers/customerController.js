@@ -68,6 +68,8 @@ const createCustomer = async (req, res) => {
         // Create Customer and Ledger in a transaction
         const result = await prisma.$transaction(async (tx) => {
             const ledgerName = customerData.name;
+            const rawBalanceInput = parseFloat(customerData.accountBalance) || 0;
+            const initialBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
 
             // Create Customer with nested Ledger
             const customer = await tx.customer.create({
@@ -81,7 +83,7 @@ const createCustomer = async (req, res) => {
                     accountType: customerData.accountType,
                     balanceType: customerData.balanceType || 'Debit',
                     accountName: ledgerName,
-                    accountBalance: parseFloat(customerData.accountBalance) || 0,
+                    accountBalance: initialBalance,
                     creationDate: customerData.creationDate ? new Date(customerData.creationDate) : new Date(),
                     bankAccountNumber: customerData.bankAccountNumber,
                     bankIFSC: customerData.bankIFSC,
@@ -120,8 +122,8 @@ const createCustomer = async (req, res) => {
                             groupId: accountsReceivableSubGroup.groupId,
                             subGroupId: accountsReceivableSubGroup.id,
                             companyId: companyId,
-                            openingBalance: parseFloat(customerData.accountBalance) || 0,
-                            currentBalance: parseFloat(customerData.accountBalance) || 0,
+                            openingBalance: initialBalance,
+                            currentBalance: initialBalance,
                             isControlAccount: false,
                             isEnabled: true,
                             description: `Customer Ledger for ${ledgerName}`
@@ -355,8 +357,10 @@ const updateCustomer = async (req, res) => {
 
         // Update in transaction
         const result = await prisma.$transaction(async (tx) => {
-            const newOpeningBalance = parseFloat(customerData.accountBalance) || 0;
-            let newCurrentBalance = newOpeningBalance;
+            const rawBalanceInput = parseFloat(customerData.accountBalance) || 0;
+            const targetCurrentBalance = customerData.balanceType === 'Credit' ? -Math.abs(rawBalanceInput) : Math.abs(rawBalanceInput);
+
+            let transactionsNet = 0;
 
             if (existingCustomer.ledgerId) {
                 // Fetch all transactions involving customer's ledger
@@ -372,12 +376,15 @@ const updateCustomer = async (req, res) => {
 
                 for (const txn of transactions) {
                     if (txn.debitLedgerId === existingCustomer.ledgerId) {
-                        newCurrentBalance += txn.amount;
+                        transactionsNet += txn.amount;
                     } else {
-                        newCurrentBalance -= txn.amount;
+                        transactionsNet -= txn.amount;
                     }
                 }
             }
+
+            const newOpeningBalance = targetCurrentBalance - transactionsNet;
+            const newCurrentBalance = targetCurrentBalance;
 
             // Update Customer
             const customer = await tx.customer.update({
