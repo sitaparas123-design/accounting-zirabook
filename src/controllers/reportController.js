@@ -1535,7 +1535,7 @@ const getProfitLoss = async (req, res) => {
             const ledgerValues = {}; // To store net value per ledger
             ledgers.forEach(l => {
                 // Opening balances of INCOME and EXPENSE ledgers are nominal figures and are excluded for custom period P&L (e.g. July 1 - July 31)
-                const openBal = isFullYear ? (parseFloat(l.openingBalance || 0) * rate) : 0;
+                const openBal = isFullYear ? parseFloat(l.openingBalance || 0) : 0;
                 ledgerValues[l.id] = openBal;
 
                 // Income and Expenses opening balances contribute to the net profit only in full-year context
@@ -1545,7 +1545,7 @@ const getProfitLoss = async (req, res) => {
 
             transactions.forEach(txn => {
                 const month = new Date(txn.date).getMonth(); // 0-11
-                const amount = (txn.amount || 0) * rate;
+                const amount = parseFloat(txn.amount || 0);
 
                 const debitLedger = ledgers.find(l => l.id === txn.debitLedgerId);
                 const creditLedger = ledgers.find(l => l.id === txn.creditLedgerId);
