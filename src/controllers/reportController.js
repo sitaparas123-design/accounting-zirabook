@@ -1474,24 +1474,27 @@ const getProfitLoss = async (req, res) => {
         const { startDate: qStart, endDate: qEnd, year: qYear } = req.query;
 
         // Determine date range
-        let startDate, endDate, year;
-        if (qStart && qEnd) {
-            startDate = new Date(qStart);
-            endDate = new Date(qEnd);
-            endDate.setHours(23, 59, 59, 999);
-            year = startDate.getFullYear(); // For growth comparison fallback
-        } else {
-            year = parseInt(qYear) || new Date().getFullYear();
-            startDate = new Date(`${year}-01-01`);
-            endDate = new Date(`${year}-12-31`);
-            endDate.setHours(23, 59, 59, 999);
+        let startDate = null;
+        let endDate = null;
+        let year = new Date().getFullYear();
+
+        if (qStart || qEnd) {
+            if (qStart) {
+                const sStr = String(qStart).split('T')[0];
+                startDate = new Date(`${sStr}T00:00:00.000Z`);
+                year = startDate.getFullYear();
+            }
+            if (qEnd) {
+                const eStr = String(qEnd).split('T')[0];
+                endDate = new Date(`${eStr}T23:59:59.999Z`);
+            }
         }
 
         const prevYear = year - 1;
 
         // Helper to fetch ledger balances matching type
         const fetchLedgerData = async (start, end) => {
-            // Fetch Ledgers with Group and Sub-Group info
+            // Fetch Ledgers for company with Group and Sub-Group info
             const ledgers = await prisma.ledger.findMany({
                 where: {
                     companyId: parseInt(companyId),
@@ -1505,16 +1508,16 @@ const getProfitLoss = async (req, res) => {
                 }
             });
 
-            const transactions = await prisma.transaction.findMany({
-                where: {
-                    companyId: parseInt(companyId),
-                    date: { gte: start, lte: end }
-                }
-            });
+            const txWhere = { companyId: parseInt(companyId) };
+            if (start || end) {
+                txWhere.date = {};
+                if (start) txWhere.date.gte = start;
+                if (end) txWhere.date.lte = end;
+            }
 
-            const companyCurrency = await getCompanyCurrency(companyId);
-            const histCurr = await getCompanyHistoricalCurrency(companyId);
-            const rate = await getConversionRate(histCurr, companyCurrency);
+            const transactions = await prisma.transaction.findMany({
+                where: txWhere
+            });
 
             // Process Data
             let totalIncome = 0;
@@ -1530,22 +1533,21 @@ const getProfitLoss = async (req, res) => {
                 otherExpense: { items: [], total: 0 }
             };
 
-            const isFullYear = (new Date(start).getMonth() === 0 && new Date(start).getDate() === 1 && new Date(end).getMonth() === 11 && new Date(end).getDate() >= 30);
+            const isFullYearOrAll = (!start && !end) || (start && end && new Date(start).getUTCMonth() === 0 && new Date(start).getUTCDate() === 1 && new Date(end).getUTCMonth() === 11 && new Date(end).getUTCDate() >= 30);
 
             const ledgerValues = {}; // To store net value per ledger
             ledgers.forEach(l => {
-                // Opening balances of INCOME and EXPENSE ledgers are nominal figures and are excluded for custom period P&L (e.g. July 1 - July 31)
-                const openBal = isFullYear ? parseFloat(l.openingBalance || 0) : 0;
+                // Opening balances of INCOME and EXPENSE ledgers are included by default or in full-year context
+                const openBal = isFullYearOrAll ? parseFloat(l.openingBalance || 0) : 0;
                 ledgerValues[l.id] = openBal;
 
-                // Income and Expenses opening balances contribute to the net profit only in full-year context
                 if (l.accountgroup.type === 'INCOME') totalIncome += openBal;
                 if (l.accountgroup.type === 'EXPENSES') totalExpense += openBal;
             });
 
             transactions.forEach(txn => {
                 const month = new Date(txn.date).getMonth(); // 0-11
-                const amount = parseFloat(txn.amount || 0);
+                const amount = (txn.amount || 0) * rate;
 
                 const debitLedger = ledgers.find(l => l.id === txn.debitLedgerId);
                 const creditLedger = ledgers.find(l => l.id === txn.creditLedgerId);
@@ -1622,12 +1624,14 @@ const getProfitLoss = async (req, res) => {
 
         const currentData = await fetchLedgerData(startDate, endDate);
 
-        // For growth comparison, we use the same dates but in the previous year
-        const prevStart = new Date(startDate);
-        prevStart.setFullYear(prevStart.getFullYear() - 1);
-        const prevEnd = new Date(endDate);
-        prevEnd.setFullYear(prevEnd.getFullYear() - 1);
-        const prevData = await fetchLedgerData(prevStart, prevEnd);
+        let prevData = { totalIncome: 0, totalExpense: 0, netProfit: 0 };
+        if (startDate && endDate) {
+            const prevStart = new Date(startDate);
+            prevStart.setFullYear(prevStart.getFullYear() - 1);
+            const prevEnd = new Date(endDate);
+            prevEnd.setFullYear(prevEnd.getFullYear() - 1);
+            prevData = await fetchLedgerData(prevStart, prevEnd);
+        }
 
         // Net Profit = (Income - Expense) as COGS is already posted on sales invoices in real-time.
         // Unsold inventory remains in Balance Sheet Current Assets, not added as a direct income in P&L.
@@ -2513,7 +2517,7 @@ const getAllTransactions = async (req, res) => {
                 createdDate = primaryTxn.invoice.createdAt;
                 lastUpdated = primaryTxn.invoice.updatedAt;
                 sourceModule = 'Sales';
-                
+
                 const items = primaryTxn.invoice.invoiceitem || [];
                 itemsList = items.map(item => item.product?.name || item.description).filter(Boolean);
                 skuList = items.map(item => item.product?.sku).filter(Boolean);
@@ -2601,7 +2605,7 @@ const getAllTransactions = async (req, res) => {
                     creditAccount: t.ledger_transaction_creditLedgerIdToledger?.name || '-',
                     amount: parseFloat(t.amount)
                 })),
-                
+
                 // Detailed product/item attributes
                 items: vType === 'JOURNAL' ? '' : (itemsList.join(', ') || '-'),
                 skus: vType === 'JOURNAL' ? '' : (skuList.join(', ') || '-'),
