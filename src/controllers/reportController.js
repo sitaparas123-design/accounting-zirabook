@@ -1547,7 +1547,7 @@ const getProfitLoss = async (req, res) => {
 
             transactions.forEach(txn => {
                 const month = new Date(txn.date).getMonth(); // 0-11
-                const amount = (txn.amount || 0) * rate;
+                const amount = parseFloat(txn.amount || 0);
 
                 const debitLedger = ledgers.find(l => l.id === txn.debitLedgerId);
                 const creditLedger = ledgers.find(l => l.id === txn.creditLedgerId);
