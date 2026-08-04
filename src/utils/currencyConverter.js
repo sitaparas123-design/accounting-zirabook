@@ -254,9 +254,9 @@ const getCompanyHistoricalCurrency = async (companyId) => {
     try {
         const company = await prisma.company.findUnique({
             where: { id: parseInt(companyId) },
-            select: { originalCurrency: true, currency: true }
+            select: { currency: true }
         });
-        return company?.originalCurrency || company?.currency || 'USD';
+        return company?.currency || 'USD';
     } catch (e) {
         console.error('Error fetching company historical currency:', e.message);
         return 'USD';

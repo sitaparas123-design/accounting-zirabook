@@ -248,6 +248,45 @@ const updateCompany = async (req, res) => {
             logToFile(`Error parsing inventoryConfig: ${e.message}`);
         }
 
+        if (currency && currentCompany.currency && currency !== currentCompany.currency) {
+            try {
+                const { getConversionRate } = require('../utils/currencyConverter');
+                const rate = await getConversionRate(currentCompany.currency, currency);
+                if (rate && rate !== 1) {
+                    const compId = parseInt(req.params.id);
+                    const ledgers = await prisma.ledger.findMany({ where: { companyId: compId } });
+                    for (const l of ledgers) {
+                        if (l.openingBalance) {
+                            await prisma.ledger.update({
+                                where: { id: l.id },
+                                data: { openingBalance: l.openingBalance * rate }
+                            });
+                        }
+                    }
+                    const customers = await prisma.customer.findMany({ where: { companyId: compId } });
+                    for (const c of customers) {
+                        if (c.accountBalance) {
+                            await prisma.customer.update({
+                                where: { id: c.id },
+                                data: { accountBalance: c.accountBalance * rate }
+                            });
+                        }
+                    }
+                    const vendors = await prisma.vendor.findMany({ where: { companyId: compId } });
+                    for (const v of vendors) {
+                        if (v.accountBalance) {
+                            await prisma.vendor.update({
+                                where: { id: v.id },
+                                data: { accountBalance: v.accountBalance * rate }
+                            });
+                        }
+                    }
+                }
+            } catch (conversionErr) {
+                console.error('Error converting company currency balances:', conversionErr);
+            }
+        }
+
         const updateData = {
             name,
             email,
